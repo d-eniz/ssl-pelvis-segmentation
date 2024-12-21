@@ -4,14 +4,17 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
-import torchvision.transforms.functional as TF
+from torch.utils.data import Dataset, DataLoader
 import nibabel as nib
 import numpy as np
 import time
 import warnings
 import os
-os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+import random
+
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # Get rid of duplicate DLL issues
+
 
 @dataclass
 class TrainingConfig:
@@ -30,47 +33,83 @@ class TrainingConfig:
     confidence_threshold: float = 0.9
 
     # Dataset splits
-    train_ratio: float = 0.7
-    val_ratio: float = 0.15
-    test_ratio: float = 0.15
+    train_test_val_split: Tuple[float, float, float] = (0.8, 0.1, 0.1)
+    seed: int = 42
 
     # Hardware parameters
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_workers: int = 0
     pin_memory: bool = True
 
+
 class PelvicMRDataset(Dataset):
-    def __init__(self, data_dir, mode='train', labeled_ratio=0.2, target_size=(256, 256, 32)):
+    """
+    Dataloader for the Pelvic MR Dataset
+    NOTE: Only the training set contains unlabeled data.
+    """
+    def __init__(self, data_dir, mode='train', target_size=(256, 256, 32), train_test_val_split=(0.8, 0.1, 0.1), seed=42):
+        """
+        :param data_dir: Directory containing the data.
+        :param mode: 'train' | 'val' | 'test' which dataset to load.
+        :param target_size: Image shape of mask.
+        :param train_test_val_split: Ratio of training, validation, and test data.
+        :param seed: Seed for reproducibility.
+        """
         self.data_dir = Path(data_dir)
         self.mode = mode
-        self.labeled_ratio = labeled_ratio
         self.target_size = target_size
+        self.train_test_val_split = train_test_val_split
+        self.seed = seed
 
         self.images = []
         self.labels = []
         self.is_labeled = []
+
         self._load_dataset()
 
     def _load_dataset(self):
+        """
+        Loads the dataset images from
+        """
         image_files = sorted(list(self.data_dir.glob("*_img.nii")))
-        total_files = len(image_files)
+        label_files = {f.stem.replace("_mask", "") for f in self.data_dir.glob("*_mask.nii")}
 
-        indices = range(total_files)   # Maybe randomly permute other than just list
-        train_split = int(self.labeled_ratio * total_files)
-        val_split = train_split + int(0.15 * total_files)
+        labeled_images = [img for img in image_files if img.stem.replace("_img", "") in label_files]
+        unlabeled_images = [img for img in image_files if img.stem.replace("_img", "") not in label_files]
 
+        # Shuffle labeled and unlabeled images consistently
+        random.seed(self.seed)
+        random.shuffle(labeled_images)
+        random.shuffle(unlabeled_images)
+
+        # Calculate split indices for labeled data
+        total_labeled = len(labeled_images)
+        train_split_labeled = int(self.train_test_val_split[0] * total_labeled)
+        val_split_labeled = train_split_labeled + int(self.train_test_val_split[1] * total_labeled)
+
+        # Split labeled data
+        labeled_train = labeled_images[:train_split_labeled]
+        labeled_val = labeled_images[train_split_labeled:val_split_labeled]
+        labeled_test = labeled_images[val_split_labeled:]
+
+        # For training, add unlabeled images to the labeled training set
         if self.mode == 'train':
-            selected_files = [image_files[i] for i in indices[:train_split]]
+            total_train = labeled_train + unlabeled_images
+            print(f"Total length of training data: {len(total_train)} - Labeled: {len(labeled_train)} - Unlabeled: {len(unlabeled_images)}")
+            random.shuffle(total_train)  # Shuffle combined training data
+            self.images = total_train
         elif self.mode == 'val':
-            selected_files = [image_files[i] for i in indices[train_split:val_split]]
+            print(f"Total length of val data {len(labeled_val)}")
+            self.images = labeled_val
         elif self.mode == 'test':
-            selected_files = [image_files[i] for i in indices[val_split:]]
+            print(f"Total length of test data {len(labeled_test)}")
+            self.images = labeled_test
         else:
-            raise ValueError(r"`mode` must be either train, val or test")
+            raise ValueError("`mode` must be either 'train', 'val', or 'test'.")
 
-        self.images = selected_files
+        # Set labels and is_labeled flags
         self.labels = [f.with_name(f.name.replace("_img", "_mask")) for f in self.images]
-        self.is_labeled = [True] * len(self.images)  # Modify as per requirements
+        self.is_labeled = [f.stem in label_files for f in self.images]
 
     def __getitem__(self, idx):
         with warnings.catch_warnings():
@@ -105,6 +144,7 @@ class PelvicMRDataset(Dataset):
     def __len__(self):
         return len(self.images)
 
+
 class CombinedLoss(nn.Module):
     def __init__(self):
         super().__init__()
@@ -136,9 +176,15 @@ class MetricsCalculator:
         return dice_scores
 
 
-def create_dataloaders(config):
-    train_set = PelvicMRDataset(config.data_dir, 'train', config.labeled_ratio, config.target_size)
-    val_set = PelvicMRDataset(config.data_dir, 'val', config.labeled_ratio, config.target_size)
+def create_dataloaders(config: TrainingConfig) -> Tuple[DataLoader, DataLoader, DataLoader, DataLoader]:
+    """
+    Create labeled, unlabeled, val and test dataloaders
+    :param config: (TrainingConfig): Training config data
+    :return: labeled_dataloader, unlabeled_dataloader, val_dataloader, test_dataloader
+    """
+    train_set = PelvicMRDataset(config.data_dir, mode='train', target_size=config.target_size, train_test_val_split=config.train_test_val_split, seed=config.seed)
+    val_set = PelvicMRDataset(config.data_dir, mode='val', target_size=config.target_size, train_test_val_split=config.train_test_val_split, seed=config.seed)
+    test_set = PelvicMRDataset(config.data_dir, mode='test', target_size=config.target_size, train_test_val_split=config.train_test_val_split, seed=config.seed)
 
     labeled_indices = [i for i, labeled in enumerate(train_set.is_labeled) if labeled]
     unlabeled_indices = [i for i, labeled in enumerate(train_set.is_labeled) if not labeled]
@@ -146,7 +192,7 @@ def create_dataloaders(config):
     labeled_loader = DataLoader(
         train_set,
         batch_size=config.batch_size,
-        sampler=SubsetRandomSampler(labeled_indices),
+        shuffle=True,
         num_workers=config.num_workers,
         pin_memory=config.pin_memory
     )
@@ -154,7 +200,7 @@ def create_dataloaders(config):
     unlabeled_loader = DataLoader(
         train_set,
         batch_size=config.batch_size,
-        sampler=SubsetRandomSampler(unlabeled_indices),
+        shuffle=True,
         num_workers=config.num_workers,
         pin_memory=config.pin_memory
     )
@@ -162,12 +208,21 @@ def create_dataloaders(config):
     val_loader = DataLoader(
         val_set,
         batch_size=config.batch_size,
+        shuffle=True,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory
+    )
+
+    test_loader = DataLoader(
+        test_set,
+        batch_size=config.batch_size,
         shuffle=False,
         num_workers=config.num_workers,
         pin_memory=config.pin_memory
     )
 
-    return labeled_loader, unlabeled_loader, val_loader
+    return labeled_loader, unlabeled_loader, val_loader, test_loader
+
 
 def load_pretrained_unet3d(in_channels=1, n_classes=9):
     from monai.networks.nets import UNet
@@ -193,7 +248,7 @@ class SimpleSSL:
         self.device = device
         self.confidence_threshold = confidence_threshold
         self.best_val_loss = float('inf')
-        self.n_classes=n_classes
+        self.n_classes = n_classes
         self.best_dice = 0
 
     def generate_pseudo_labels(self, unlabeled_loader):
@@ -344,7 +399,7 @@ def main():
     config.output_dir.mkdir(exist_ok=True)
 
     print("Creating dataloaders...")
-    labeled_loader, unlabeled_loader, val_loader = create_dataloaders(config)
+    labeled_loader, unlabeled_loader, val_loader, test_loader = create_dataloaders(config)
 
     print("Initializing model...")
     model = load_pretrained_unet3d(1, config.n_classes).to(config.device)
@@ -354,6 +409,7 @@ def main():
 
     trainer = SimpleSSL(model, criterion, optimizer, config.device, n_classes=config.n_classes)
     trainer.train(labeled_loader, unlabeled_loader, val_loader, config.num_epochs, config.output_dir)
+
 
 if __name__ == '__main__':
     main()

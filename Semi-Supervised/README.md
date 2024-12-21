@@ -17,6 +17,16 @@ dataset and finetuning the model using SSL on our dataset.
 
 Thinking of using `MONAI` package for loading the models, but not sure on this yet.
 
+SEMI SUPERVISED:
+
+All data in our dataset is labelled!
+
+So we can:
+- do as the other report (70%) did and use unsupervised learning as part of a Y-Net autoencoder
+- augment just original images and add these to the dataset as additional unlabelled images
+- Train a GAN on the labelled images in order to generate new images
+- Hybrid approach of both
+
 ## Packages
 
 
@@ -32,3 +42,11 @@ For current testing:
 ```shell
 pip install monai~=1.4.0
 ```
+
+## Testing
+
+1. Train using SSL on not pretrained model - evaluate and see how it does
+2. Train using SSL on pretrained model - evaluate and see how it does
+3. Compare the 2 models
+- Try different types of SSL
+- Try different augmentation techniques
