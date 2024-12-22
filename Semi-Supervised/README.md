@@ -50,3 +50,7 @@ pip install monai~=1.4.0
 3. Compare the 2 models
 - Try different types of SSL
 - Try different augmentation techniques
+
+## Code versions:
+
+

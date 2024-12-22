@@ -1,9 +1,5 @@
 """
 Initial testing script
-
-TODO:
-- Random shuffling of dataset before assinging train, val test
-- Set train, val, test split in config
 """
 
 import torch
@@ -225,8 +221,6 @@ class SimpleSSL:
             if epoch % 5 == 0 and unlabeled_loader is not None:
                 pseudo_labels, confidence_masks = self.generate_pseudo_labels(unlabeled_loader)
 
-            # Train on labeled whoops
-            print("\nTraining on labeled whoops...")
             self.model.train()
             total_loss = 0
             n_batches = 0
