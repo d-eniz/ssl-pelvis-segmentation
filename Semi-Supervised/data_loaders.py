@@ -87,6 +87,7 @@ class PelvicMRDataset(Dataset):
     def __getitem__(self, idx):
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
+            warnings.filterwarnings("ignore", category=FutureWarning)  # Catch torch load warnings
 
             img = nib.load(str(self.images[idx])).get_fdata()
             img = torch.tensor(img)
@@ -112,7 +113,12 @@ class PelvicMRDataset(Dataset):
                 label = label.squeeze(0)  # Remove the singleton channel dimension
                 sample['label'] = label
 
-
+            else:
+                # Load pseudo-labels if they exist
+                pseudo_label_path = Path(self.data_dir) / f"{sample['code']}_pseudo.pt"
+                if pseudo_label_path.exists():
+                    pseudo_data = torch.load(pseudo_label_path)
+                    sample.update(pseudo_data)
 
             return sample
 

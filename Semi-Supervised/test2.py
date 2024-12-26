@@ -96,21 +96,29 @@ def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, de
 
     path = Path(modelStateDictPath)
     data = torch.load(path)
-    epoch = data["epoch"]
-    print(f"""
-        Model Loaded From {path}
-        Validation Loss: {data["val_loss"]}
-        Dice Score: {data["dice_score"]}
-        Epoch: {epoch}
-        ALL Dice Scores: {data["all_dice_scores"]}
-                """)
-    model.load_state_dict(data["model_state_dict"])
+    epoch = 0
+    dice_score = 0
+    all_dice_scores = []
+    try:
+        epoch = data["epoch"]
+        print(f"""
+            Model Loaded From {path}
+            Validation Loss: {data["val_loss"]}
+            Dice Score: {data["dice_score"]}
+            Epoch: {epoch}
+            ALL Dice Scores: {data["all_dice_scores"]}
+                    """)
+        model.load_state_dict(data["model_state_dict"])
+        dice_score = data["dice_score"]
+        all_dice_scores = data["all_dice_scores"]
+    except KeyError:
+        print("Model not loaded from pretrained as data not saved properly!")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     optimizer.load_state_dict(data["optimizer_state_dict"])
 
-    return model, optimizer, int(epoch), data["dice_score"], data["all_dice_scores"]
+    return model, optimizer, int(epoch), dice_score, all_dice_scores
 
 
 def get_unet3D_larger(
@@ -208,7 +216,7 @@ def softmax_confidence(predictions, T=2.0):
 
 
 class SimpleSSL:
-    def __init__(self, model, criterion, optimizer, device, confidence_threshold=0.9, n_classes=9):
+    def __init__(self, model, criterion, optimizer, device, confidence_threshold=0.9, n_classes=9, data_dir=None):
         self.model = model
         self.criterion = criterion
         self.optimizer = optimizer
@@ -218,6 +226,7 @@ class SimpleSSL:
         self.n_classes = n_classes  # Including background class
         self.best_dice = 0
         self.all_dice_scores = []
+        self.data_dir = data_dir  # For saving psuedo labels to during an epoch for RAM memory efficiency
 
     def generate_pseudo_labels(self, unlabeled_loader):
         """
@@ -226,34 +235,38 @@ class SimpleSSL:
         Can implement this in future saving to disk
         """
         self.model.eval()
-        pseudo_labels = []
+        output_dir = Path(self.data_dir) if self.data_dir else None
 
         with torch.no_grad():
             for i, batch in enumerate(unlabeled_loader):
                 print(f"\rProcessing unlabeled batch {i + 1}/{len(unlabeled_loader)}", end="")
 
                 images = batch['image'].to(self.device)  # Shape: (B, 1, D, H, W)
+                codes = batch['code']  # Unique identifiers for saving
                 outputs = self.model(images)  # Shape: (B, 9, D, H, W)
 
                 confidence, labels = softmax_confidence(outputs)  # Shape: (B, D, H, W)
-
                 mask = confidence >= self.confidence_threshold
 
-                pseudo_labels.append({
-                    'image': images.cpu(),  # Move to CPU to free VRAM
-                    'label': labels.cpu(),
-                    'confidence': confidence.cpu(),  # Move to CPU to free VRAM
-                    'mask': mask.cpu(),  # Move to CPU to free VRAM
-                })
+                # Save to disk or augment dataloader output
+                for j in range(len(images)):
+                    pseudo_data = {
+                        'label': labels[j].cpu(),
+                        'confidence': confidence[j].cpu(),
+                        'mask': mask[j].cpu(),
+                    }
 
-                # Explicitly delete tensors to free GPU memory
+                    if output_dir:
+                        # Save pseudo-labels to disk
+                        torch.save(pseudo_data, output_dir / f"{codes[j]}_pseudo.pt")
+
+                # Free GPU memory
                 del images, outputs, confidence, labels, mask
                 torch.cuda.empty_cache()
 
         print("\n")
-        return pseudo_labels
 
-    def train_epoch(self, labeled_loader, unlabeled_data, unlabeled_loader):
+    def train_epoch(self, labeled_loader, unlabeled_loader):
         """
         Modified training epoch to handle the new pseudo-label format.
         """
@@ -276,8 +289,8 @@ class SimpleSSL:
             total_loss += loss.item()
 
         # Train on pseudo-labeled data
-        if unlabeled_data is not None:
-            for i, pseudo_batch in enumerate(unlabeled_data):
+        if unlabeled_loader is not None:
+            for i, pseudo_batch in enumerate(unlabeled_loader):
                 print(f"\rTraining unlabeled batch {i + 1}/{len(unlabeled_loader)}", end="")
 
                 images = pseudo_batch['image'].to(self.device)  # Shape: (B, 1, D, H, W)
@@ -374,13 +387,12 @@ class SimpleSSL:
             self.confidence_threshold = max(0.5, 0.95 - 0.4 * (epoch / num_epochs))
 
             # Generate pseudo-labels
-            unlabeled_data = None
             if unlabeled_loader is not None and epoch > 18 and epoch % 2 == 0:  # Let model train for x epochs on just labelled before using unlabelled then only use unlabelled data every 2 epochs
-                # if unlabeled_loader is not None:
-                unlabeled_data = self.generate_pseudo_labels(unlabeled_loader)
+            # if unlabeled_loader is not None:
+                self.generate_pseudo_labels(unlabeled_loader)
 
             # Train
-            train_loss = self.train_epoch(labeled_loader, unlabeled_data, unlabeled_loader)
+            train_loss = self.train_epoch(labeled_loader, unlabeled_loader)
             print(f"Training Loss: {train_loss:.4f}")
 
             # Validate
@@ -411,7 +423,7 @@ def main():
     labeled_loader, unlabeled_loader, val_loader, test_loader = create_dataloaders(config)
 
     print("Initializing model...")
-    option = 2
+    option = 1
     # ============= OPTION 1 - LOCAL PRETRAINED =============
     if option == 1:
         model = get_unet3D()
@@ -438,7 +450,7 @@ def main():
 
     criterion = CombinedLoss()
 
-    trainer = SimpleSSL(model, criterion, optimizer, config.device, n_classes=config.n_classes)
+    trainer = SimpleSSL(model, criterion, optimizer, config.device, n_classes=config.n_classes, data_dir=config.data_dir)
     trainer.best_dice = best_dice
     trainer.all_dice_scores = all_dice
     trainer.train(labeled_loader, unlabeled_loader, val_loader, config.num_epochs, config.output_dir, epoch_start=epoch)
