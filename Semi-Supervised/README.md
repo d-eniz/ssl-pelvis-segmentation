@@ -30,9 +30,9 @@ So we can:
 ## Packages
 
 
-To get GPU support on compute node, currently have to pip install:
+To get GPU support on compute node, currently have to pip install/conda install:
 ```shell
-conda install pytorch-cuda=11.8 -c pytorch -c nvidia
+conda install pytorch-cuda=12.1 -c pytorch -c nvidia
 ```
 
 Models can run on CPU so doesn't need to be one of our 3 pip installs, but can just be used for training models.
@@ -41,6 +41,8 @@ For current testing:
 
 ```shell
 pip install monai~=1.4.0
+pip install monai[einops]
+pip install requests
 ```
 
 ## Testing
