@@ -1,3 +1,6 @@
+"""
+Main training script for SSL
+"""
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
@@ -65,6 +68,12 @@ def dice_loss(pred, target, smooth=1e-5):
 
 
 def get_unet3D(in_channels=1, n_classes=9):
+    """
+    Get a standard UNet 3D model from Monai
+    :param in_channels:
+    :param n_classes:
+    :return:
+    """
     from monai.networks.nets import UNet
     from monai.networks.layers import Norm
 
@@ -83,7 +92,7 @@ def get_unet3D(in_channels=1, n_classes=9):
 def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, device: torch.device, lr: float) -> \
         (torch.nn.Module, torch.optim, int, float, list[float]):
     """
-    Load pretrained weights onto a model
+    Load pretrained weights (from a previous run) back onto a model and optimizer
     :param model: model to have weights loaded onto
     :param modelStateDictPath: Path to .pth / .pt file containing weights
     :param device: Training config
@@ -173,7 +182,7 @@ def get_unet3D_larger(
 
 def load_swin_unetr(num_classes: int=9, pretrained=True) -> torch.nn.Module:
     """
-    Loads the pretrained swin_unetr_btcv_segmentation model from Monai
+    Loads the pretrained swin_unetr_btcv_segmentation model from Monai link: https://monai.io/model-zoo.html
     :param: num_classes: Number of output classes
     :return: model - loaded model with pretrained weights
     """
@@ -183,15 +192,20 @@ def load_swin_unetr(num_classes: int=9, pretrained=True) -> torch.nn.Module:
     from monai.networks.blocks import UnetOutBlock
 
     # NOTE: AUTOMATICALLY RESCALES THE INPUT SIZE AS LONG AS MULTIPLE OF 32
+
+    # Load the model from online resource
     model_dict = load("swin_unetr_btcv_segmentation")
 
+    # Get path to the directory and model config
     torch_hub_dir = Path(torch.hub.get_dir())
     config_path = next(torch_hub_dir.glob("**/swin_unetr_btcv_segmentation/configs/train.json"))
 
+    # Define and setup model according to instructions in downloaded model path
     config = ConfigParser()
     config.read_config(config_path)
     net = config.get_parsed_content("network_def", instantiate=True)
 
+    # Load pretrained weights from download
     if pretrained:
         net.load_state_dict(model_dict)
 
@@ -200,7 +214,6 @@ def load_swin_unetr(num_classes: int=9, pretrained=True) -> torch.nn.Module:
     net.out = UnetOutBlock(spatial_dims=3, in_channels=in_channels, out_channels=num_classes)
 
     return net
-
 
 
 def softmax_confidence(predictions, T=2.0):
@@ -216,6 +229,9 @@ def softmax_confidence(predictions, T=2.0):
 
 
 class SimpleSSL:
+    """
+    Main script for Semi Supervised Learning
+    """
     def __init__(self, model, criterion, optimizer, device, confidence_threshold=0.9, n_classes=9, data_dir=None):
         self.model = model
         self.criterion = criterion
@@ -232,7 +248,7 @@ class SimpleSSL:
         """
         Generate pseudo labels for the data in the unlabeled loader.
 
-        Can implement this in future saving to disk
+        Saves values to disk as .pt file with torch.save for RAM usage issues (storing so many 3D files gets big)
         """
         self.model.eval()
         output_dir = Path(self.data_dir) if self.data_dir else None
@@ -264,12 +280,15 @@ class SimpleSSL:
                 del images, outputs, confidence, labels, mask
                 torch.cuda.empty_cache()
 
-        print("\n")
+    def train_epoch(self, labeled_loader, unlabeled_loader, unlabeled_train):
+        """
+        Train for 1 epoch on labeled data and unlabeled data if bool unlabeled_train is True
+        :param labeled_loader: (Dataloader) - Dataloader for labeled data
+        :param unlabeled_loader: (Dataloader) - Dataloader for unlabeled data
+        :param unlabeled_train: (bool) - Should train on unlabeled data?
+        :return: loss
+        """
 
-    def train_epoch(self, labeled_loader, unlabeled_loader):
-        """
-        Modified training epoch to handle the new pseudo-label format.
-        """
         self.model.train()
         total_loss = 0
 
@@ -289,7 +308,7 @@ class SimpleSSL:
             total_loss += loss.item()
 
         # Train on pseudo-labeled data
-        if unlabeled_loader is not None:
+        if unlabeled_loader is not None and unlabeled_train:
             for i, pseudo_batch in enumerate(unlabeled_loader):
                 print(f"\rTraining unlabeled batch {i + 1}/{len(unlabeled_loader)}", end="")
 
@@ -309,11 +328,12 @@ class SimpleSSL:
 
                 total_loss += loss.item()
 
-        print("\n")
         return total_loss / (len(labeled_loader) + (len(unlabeled_loader) if unlabeled_loader else 0))
 
     def validate(self, val_loader, output_dir, epoch):
-        """Validation with additional metrics"""
+        """
+        Validation stage with Dice score and regular loss
+        """
         self.model.eval()
         total_loss = 0
         all_dice_scores = []
@@ -379,6 +399,16 @@ class SimpleSSL:
         print(f"\nSaved new best model with average Dice score: {avg_dice:.4f}")
 
     def train(self, labeled_loader, unlabeled_loader, val_loader, num_epochs, output_dir, epoch_start=0):
+        """
+        Main training loop
+        :param labeled_loader:
+        :param unlabeled_loader:
+        :param val_loader:
+        :param num_epochs:
+        :param output_dir:
+        :param epoch_start:
+        :return:
+        """
         for epoch in range(epoch_start, num_epochs):
             print(f"\nEpoch {epoch + 1}/{num_epochs}")
             start_time = time.time()
@@ -387,12 +417,14 @@ class SimpleSSL:
             self.confidence_threshold = max(0.5, 0.95 - 0.4 * (epoch / num_epochs))
 
             # Generate pseudo-labels
+            unlabeled_train = False
             if unlabeled_loader is not None and epoch > 18 and epoch % 2 == 0:  # Let model train for x epochs on just labelled before using unlabelled then only use unlabelled data every 2 epochs
             # if unlabeled_loader is not None:
+                unlabeled_train = True
                 self.generate_pseudo_labels(unlabeled_loader)
 
             # Train
-            train_loss = self.train_epoch(labeled_loader, unlabeled_loader)
+            train_loss = self.train_epoch(labeled_loader, unlabeled_loader, unlabeled_train)
             print(f"Training Loss: {train_loss:.4f}")
 
             # Validate
@@ -408,22 +440,33 @@ class SimpleSSL:
             print(f"Epoch completed in {elapsed:.2f}s")
 
 
-def main():
-    # Get augmented images
-    # augmentation.delete_augmented_images("../data")
-    # augmentation.main()
+def train(option=2):
+    """
+    Main SSL training script
+    :param option: which model type to run
+    :return:
+    """
+    # Get augmented images -- Comment/Uncomment if augmented images already made
+    augmentation.delete_augmented_images("../data")
+    augmentation.main()
 
     # Do actual training
     config = SSLTrainingConfig()
-    config.output_dir.mkdir(exist_ok=True)
-    config.batch_size = 2
-    config.num_workers = 2
+    config.output_dir.mkdir(exist_ok=True)  # Make sure output dir exists
 
     print("Creating dataloaders...")
     labeled_loader, unlabeled_loader, val_loader, test_loader = create_dataloaders(config)
 
     print("Initializing model...")
-    option = 1
+
+    # ============= OPTION 0 - LOCAL NOT PRETRAINED =============
+    if option == 0:
+        model = get_unet3D()
+        optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+        epoch = 0
+        best_dice = 0
+        all_dice = []
+
     # ============= OPTION 1 - LOCAL PRETRAINED =============
     if option == 1:
         model = get_unet3D()
@@ -434,6 +477,7 @@ def main():
     elif option == 2:
         model = load_swin_unetr(num_classes=config.n_classes, pretrained=True)
         model.to(config.device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
         epoch = 0
         best_dice = 0
         all_dice = []
@@ -445,9 +489,6 @@ def main():
                                                               f"{config.output_dir}/best_model.pth"),
                                                           device=config.device, lr=config.learning_rate)
 
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
-
     criterion = CombinedLoss()
 
     trainer = SimpleSSL(model, criterion, optimizer, config.device, n_classes=config.n_classes, data_dir=config.data_dir)
@@ -457,4 +498,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    train()

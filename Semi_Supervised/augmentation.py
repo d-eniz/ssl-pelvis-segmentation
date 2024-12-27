@@ -1,5 +1,7 @@
 """
 A script to carry out data augmentation to create unlabelled data
+
+Make sure to check images, their size and how they look when adding new transforms as they can mess up for 3D images
 """
 import torch
 import torchvision.transforms as T
@@ -149,7 +151,7 @@ def save_augmented_image(code, augmented_image, save_dir):
 
     # Save the image
     nib.save(nib.Nifti1Image(augmented_image_np, affine=None), str(save_path))
-    # print(f"Saved augmented image: {save_path}")
+    print(f"Saved augmented image: {save_path}", end="")
 
 
 def delete_augmented_images(data_path):

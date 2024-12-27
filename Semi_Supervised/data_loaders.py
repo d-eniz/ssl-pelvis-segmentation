@@ -118,6 +118,12 @@ class PelvicMRDataset(Dataset):
                 pseudo_label_path = Path(self.data_dir) / f"{sample['code']}_pseudo.pt"
                 if pseudo_label_path.exists():
                     pseudo_data = torch.load(pseudo_label_path)
+
+                    # Detach and set requires_grad=False for all tensor data
+                    for key, value in pseudo_data.items():
+                        if torch.is_tensor(value):
+                            pseudo_data[key] = value.detach().requires_grad_(False)
+
                     sample.update(pseudo_data)
 
             return sample
@@ -149,13 +155,16 @@ def create_dataloaders(config) -> Tuple[DataLoader, DataLoader, DataLoader, Data
         pin_memory=config.pin_memory
     )
 
-    unlabeled_loader = DataLoader(
-        train_set,
-        batch_size=config.batch_size,
-        sampler=SubsetRandomSampler(unlabeled_indices),
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory
-    )
+    if len(unlabeled_indices) != 0:
+        unlabeled_loader = DataLoader(
+            train_set,
+            batch_size=config.batch_size,
+            sampler=SubsetRandomSampler(unlabeled_indices),
+            num_workers=config.num_workers,
+            pin_memory=config.pin_memory
+        )
+    else:
+        unlabeled_loader = None
 
     val_loader = DataLoader(
         val_set,
