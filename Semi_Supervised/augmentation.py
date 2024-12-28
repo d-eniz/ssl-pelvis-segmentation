@@ -13,14 +13,33 @@ from data_loaders import create_dataloaders
 from config import SSLTrainingConfig
 import os
 import numpy as np
+from monai.transforms import (
+    Compose,
+    RandRotate90,
+    RandAffine,
+    RandGaussianNoise,
+    RandGaussianSmooth,
+    RandAdjustContrast,
+    RandScaleIntensity,
+    RandShiftIntensity,
+    RandGibbsNoise,
+    RandCoarseDropout,
+    SpatialPad,
+    CenterSpatialCrop,
+    NormalizeIntensity,
+    EnsureType,
+    EnsureChannelFirst,
+    ScaleIntensity
+)
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # Get rid of duplicate DLL issues
 
 
-def apply_augmentations(image, p=0.5):
+def apply_augmentations_torch(image, p=0.5):
     """
     Apply augmentations suitable for 3D medical imaging data.
 
+    **NOTE** THIS IS THE OLD PYTORCH WAY OF DOING THIS - REPLACED BY MONAI TRANSFORMS
     Args:
         image: Tensor of shape (C, H, W, D) - 3D image volume
         p: Probability of applying each augmentation
@@ -77,47 +96,10 @@ def apply_augmentations(image, p=0.5):
                           padding_mode='border',
                           align_corners=False).squeeze(0)
 
-    # # 2. Scaling (2-3%)
-    # scale_factor = 0.99 + torch.rand(1) * 0.02  # Random scale between 0.99 and 1.01
-    # new_size = [int(s * scale_factor) for s in image.shape[1:]]
-    # image = F.interpolate(image.unsqueeze(0),
-    #                       size=new_size,
-    #                       mode='trilinear',
-    #                       align_corners=False).squeeze(0)
-    # # Resize back to original size
-    # image = F.interpolate(image.unsqueeze(0),
-    #                       size=orig_shape[1:],
-    #                       mode='trilinear',
-    #                       align_corners=False).squeeze(0)
-    #
-    # # 3. Translation (1-2%)
-    # if torch.rand(1) < p:
-    # shift = [(torch.rand(1) * 0.04 - 0.02) * s for s in image.shape[1:]]  # ±2% shift
-    # grid = torch.ones(1, *image.shape[1:], 3, device=device)
-    # grid[..., 0] = grid[..., 0] + shift[0]
-    # grid[..., 1] = grid[..., 1] + shift[1]
-    # grid[..., 2] = grid[..., 2] + shift[2]
-    # image = F.grid_sample(image.unsqueeze(0),
-    #                       grid,
-    #                       mode='bilinear',
-    #                       padding_mode='zeros',
-    #                       align_corners=False).squeeze(0)
-    #
     # 4. Intensity augmentations
     # Gamma correction (0.9-1.1)
     gamma = 0.9 + torch.rand(1) * 0.2
     image = torch.pow(image, gamma)
-    #
-    # # Random contrast (0.95-1.05)
-    # contrast_factor = 0.95 + torch.rand(1) * 0.1
-    # mean = torch.mean(image)
-    # image = (image - mean) * contrast_factor + mean
-    #
-    # # 5. Random Gaussian noise
-    # if torch.rand(1) < p:
-    #     noise = torch.randn_like(image) * 0.02
-    #     image = image + noise
-    #     image = torch.clamp(image, 0, 1)
 
     # Convert back to original format (C, H, W, D)
     image = image.permute(0, 2, 1, 3)
@@ -133,6 +115,58 @@ def apply_augmentations(image, p=0.5):
 
     return image
 
+
+def get_monai_transforms(prob=0.5, image_size=(160, 160, 32)):
+    train_transforms = Compose([
+        # Ensure proper channel dimension and type
+        # EnsureChannelFirst(),
+        EnsureType(),
+
+        # Normalize to [0,1] range
+        ScaleIntensity(minv=0.0, maxv=1.0),
+
+        # Spatial transforms that preserve anatomical structures
+        RandAffine(
+            prob=prob,
+            rotate_range=(0.26, 0.26, 0.26),  # about 15 deg
+            scale_range=(0.05, 0.05, 0.05),
+            translate_range=(5, 5, 5),
+            padding_mode='border'
+        ),
+
+        # Intensity transforms (all work within [0,1] range)
+        RandScaleIntensity(factors=0.1, prob=prob),
+        RandShiftIntensity(offsets=0.1, prob=prob),
+        RandAdjustContrast(gamma=(0.9, 1.1), prob=prob),
+
+        # Noise and artifact simulation
+        RandGibbsNoise(alpha=(0.0, 0.5), prob=prob / 3),
+
+        # Dropout for robustness
+        RandCoarseDropout(
+            holes=5,
+            spatial_size=(1, 1, 1),
+            fill_value=0.0,
+            prob=prob / 3,
+        ),
+
+        # Ensure consistent size
+        SpatialPad(spatial_size=image_size),
+        CenterSpatialCrop(roi_size=image_size),
+
+        # Final normalization to ensure [0,1] range after all transforms
+        ScaleIntensity(minv=0.0, maxv=1.0),
+
+        # Ensure output is torch tensor
+        EnsureType(data_type="tensor"),
+    ])
+
+    return train_transforms
+
+
+def apply_augmentations_monai(image, transform):
+    result = transform(image)
+    return result
 
 
 def save_augmented_image(code, augmented_image, save_dir):
@@ -176,11 +210,12 @@ def delete_augmented_images(data_path):
 def main():
     # Step 1 - Load training data
     config = SSLTrainingConfig()
-    config.target_size = (180, 180, 43)
     labeled_dataloader, _, _, _ = create_dataloaders(config=config)
 
     # Directory to save augmented images
     save_dir = config.data_dir
+
+    transform = get_monai_transforms(image_size=config.target_size)
 
     # Step 2 - Apply augmentations to data
     for batch in labeled_dataloader:
@@ -192,7 +227,8 @@ def main():
             image = image.clamp(0, 1)
 
             # Apply augmentations
-            augmented_image = apply_augmentations(image)
+            # augmented_image = apply_augmentations(image)
+            augmented_image = apply_augmentations_monai(image, transform)
 
             # Step 3 - Save augmented images back to file
             save_augmented_image(paths[i], augmented_image, save_dir)
