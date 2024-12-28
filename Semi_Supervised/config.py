@@ -11,7 +11,7 @@ class SSLTrainingConfig:
     # Data parameters
     data_dir: Path = Path("../data")
     output_dir: Path = Path("output")
-    target_size: Tuple[int, int, int] = (256, 256, 32)
+    target_size: Tuple[int, int, int] = (160, 160, 32)
     n_classes: int = 9
 
     # Training parameters

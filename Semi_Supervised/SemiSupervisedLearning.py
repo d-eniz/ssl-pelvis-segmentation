@@ -181,7 +181,7 @@ def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, co
         print("No optimizer weights found in checkpoint, using default.")
 
     # Set up preloaded scheduler
-    scheduler = config.scheduler(optimizer, T_max=config.num_epochs)
+    scheduler = config.scheduler(optimizer, T_max=config.num_epochs/4)
     scheduler_weights = data.get("scheduler_state_dict", None)
     if scheduler_weights:
         scheduler.load_state_dict(scheduler_weights)
@@ -293,7 +293,8 @@ class SimpleSSL:
     """
     Main script for Semi Supervised Learning
     """
-    def __init__(self, model, criterion, optimizer, scheduler: torch.optim.lr_scheduler, device, confidence_threshold=0.9, n_classes=9, data_dir=None):
+    def __init__(self, model, criterion, optimizer, scheduler: torch.optim.lr_scheduler, device,
+                 confidence_threshold=0.9, n_classes=9, data_dir=None, patience=15):
         self.model = model
         self.criterion = criterion
         self.optimizer = optimizer
@@ -305,6 +306,10 @@ class SimpleSSL:
         self.best_dice = 0
         self.all_dice_scores = []
         self.data_dir = data_dir  # For saving psuedo labels to during an epoch for RAM memory efficiency
+
+        self.patience = patience
+        self.epoch_since_last_improvement = 0
+        self.best_dice_epoch = 0
 
     def generate_pseudo_labels(self, unlabeled_loader):
         """
@@ -436,8 +441,14 @@ class SimpleSSL:
         self.all_dice_scores.append(avg_dice_all)
         if avg_dice_all > self.best_dice:
             self.best_dice = avg_dice_all
+            self.best_dice_epoch = epoch
             self.save_checkpoint(output_dir, epoch, avg_val_loss, avg_dice_all, avg_dice)
 
+            # Early stopping
+            self.epoch_since_last_improvement = 0
+        else:
+            self.epoch_since_last_improvement += 1
+                
         return avg_val_loss, avg_dice_all, avg_dice
 
     def calculate_dice_score(self, pred, target):
@@ -505,6 +516,12 @@ class SimpleSSL:
             self.scheduler.step()
             print(f"Learning Rate: {self.scheduler.get_last_lr()[0]:.6f}")
             print(f"Epoch completed in {elapsed:.2f}s")
+            
+            if self.epoch_since_last_improvement >= self.patience:
+                # Early stopping initiated
+                print(f"Early stopping due to no model improvement at epoch {epoch} with best Dice {self.best_dice} "
+                      f"at epoch {self.best_dice_epoch}")
+                break
 
 
 def train(option=2):
@@ -535,7 +552,7 @@ def train(option=2):
         model = get_unet3D()
         model.to(config.device)
         optimizer = config.optimizer(model.parameters(), lr=config.learning_rate)
-        scheduler = config.scheduler(optimizer, T_max=config.num_epochs)
+        scheduler = config.scheduler(optimizer, T_max=config.num_epochs/4)
         epoch = 0
         best_dice = 0
         all_dice = []
@@ -551,7 +568,7 @@ def train(option=2):
         model = load_swin_unetr(num_classes=config.n_classes, pretrained=True)
         model.to(config.device)
         optimizer = config.optimizer(model.parameters(), lr=config.learning_rate)
-        scheduler = config.scheduler(optimizer, T_max=config.num_epochs)
+        scheduler = config.scheduler(optimizer, T_max=config.num_epochs/4)
         epoch = 0
         best_dice = 0
         all_dice = []
