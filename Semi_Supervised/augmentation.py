@@ -151,7 +151,7 @@ def save_augmented_image(code, augmented_image, save_dir):
 
     # Save the image
     nib.save(nib.Nifti1Image(augmented_image_np, affine=None), str(save_path))
-    print(f"Saved augmented image: {save_path}", end="")
+    print(f"\rSaved augmented image: {save_path}", end="")
 
 
 def delete_augmented_images(data_path):
@@ -168,7 +168,7 @@ def delete_augmented_images(data_path):
     for file in data_path.glob("*_aug_img.nii"):
         try:
             file.unlink()  # Delete the file
-            print(f"Deleted: {file}")
+            print(f"\rDeleted: {file}", end="")
         except Exception as e:
             print(f"Error deleting file {file}: {e}")
 

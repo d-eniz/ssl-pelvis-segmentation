@@ -25,6 +25,12 @@ class SSLTrainingConfig:
     train_test_val_split: Tuple[float, float, float] = (0.8, 0.1, 0.1)
     seed: int = 42
 
+    # Optimizer and Scheduler
+    optimizer: torch.optim = torch.optim.AdamW
+    weight_decay: float = 1e-4
+
+    scheduler: torch.optim.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR
+
     # Hardware parameters
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_workers: int = 0

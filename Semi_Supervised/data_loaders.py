@@ -65,7 +65,7 @@ class PelvicMRDataset(Dataset):
         # For training, add unlabeled images to the labeled training set
         if self.mode == 'train':
             total_train = labeled_train + unlabeled_images
-            print(f"Total length of training data: {len(total_train)} - Labeled: {len(labeled_train)} - Unlabeled: {len(unlabeled_images)}")
+            print(f"\nTotal length of training data: {len(total_train)} - Labeled: {len(labeled_train)} - Unlabeled: {len(unlabeled_images)}")
             random.shuffle(total_train)  # Shuffle combined training data
             self.images = total_train
         elif self.mode == 'val':

@@ -47,6 +47,56 @@ class CombinedLoss(nn.Module):
         return self.alpha * dice + (1 - self.alpha) * ce_loss
 
 
+class CombinedFocalDiceLoss(nn.Module):
+    def __init__(self, alpha=0.5, beta=0.5, gamma=2.0, focal_alpha=1.0):
+        """
+        Combines Focal Loss and Dice Loss.
+        Args:
+        - alpha: Weight for Dice loss (default: 0.5).
+        - beta: Weight for Focal loss (default: 0.5).
+        - gamma: Focusing parameter for Focal loss.
+        - focal_alpha: Weighting factor for Focal loss to balance class importance.
+        - class_weights: Class weights for Focal loss.
+        - smooth: Smoothing factor for Dice loss to avoid division by zero.
+        """
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+        self.focal_alpha = focal_alpha
+
+    def focal_loss(self, pred, target):
+        """
+        Compute the Focal loss.
+        Args:
+        - pred: Predicted logits of shape (N, C, H, W, D).
+        - target: Ground truth labels of shape (N, H, W, D).
+        Returns:
+        - Focal loss value.
+        """
+        pred = F.log_softmax(pred, dim=1)  # Log probabilities
+        target_one_hot = F.one_hot(target, num_classes=pred.size(1)).permute(0, 4, 1, 2, 3)  # Convert to one-hot
+
+        ce_loss = -target_one_hot * pred  # Cross-entropy loss
+        pt = torch.exp(-ce_loss)  # Probabilities of correct class
+        focal_loss = self.focal_alpha * (1 - pt) ** self.gamma * ce_loss
+
+        return focal_loss.mean()
+
+    def forward(self, pred, target):
+        """
+        Compute the combined loss.
+        Args:
+        - pred: Predicted logits of shape (N, C, H, W, D).
+        - target: Ground truth labels of shape (N, H, W, D).
+        Returns:
+        - Combined loss value.
+        """
+        dice = dice_loss(pred, target)
+        focal = self.focal_loss(pred, target)
+        return self.alpha * dice + self.beta * focal
+
+
 def dice_loss(pred, target, smooth=1e-5):
     """
     Compute the Dice loss.
@@ -89,19 +139,18 @@ def get_unet3D(in_channels=1, n_classes=9):
     return model
 
 
-def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, device: torch.device, lr: float) -> \
+def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, config: SSLTrainingConfig) -> \
         (torch.nn.Module, torch.optim, int, float, list[float]):
     """
     Load pretrained weights (from a previous run) back onto a model and optimizer
     :param model: model to have weights loaded onto
     :param modelStateDictPath: Path to .pth / .pt file containing weights
-    :param device: Training config
-    :param lr: Learning rate for optimizer
-    :return: model, optimizer, epoch, best dice score
+    :param config: Training config
+    :return: model, optimizer, scheduler, epoch, best dice score, all_dice_scores
     """
 
     # Load model onto device
-    model.to(device)
+    model.to(config.device)
 
     path = Path(modelStateDictPath)
     data = torch.load(path)
@@ -123,11 +172,23 @@ def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, de
     except KeyError:
         print("Model not loaded from pretrained as data not saved properly!")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    # Set up preloaded optimizer
+    optimizer = config.optimizer(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+    optimizer_weights = data.get("optimizer_state_dict", None)
+    if optimizer_weights:
+        optimizer.load_state_dict(optimizer_weights)
+    else:
+        print("No optimizer weights found in checkpoint, using default.")
 
-    optimizer.load_state_dict(data["optimizer_state_dict"])
+    # Set up preloaded scheduler
+    scheduler = config.scheduler(optimizer, T_max=config.num_epochs)
+    scheduler_weights = data.get("shceduler_state_dict", None)
+    if scheduler_weights:
+        scheduler.load_state_dict(scheduler_weights)
+    else:
+        print("No scheduler weights found, using default.")
 
-    return model, optimizer, int(epoch), dice_score, all_dice_scores
+    return model, optimizer, scheduler, int(epoch), dice_score, all_dice_scores
 
 
 def get_unet3D_larger(
@@ -232,10 +293,11 @@ class SimpleSSL:
     """
     Main script for Semi Supervised Learning
     """
-    def __init__(self, model, criterion, optimizer, device, confidence_threshold=0.9, n_classes=9, data_dir=None):
+    def __init__(self, model, criterion, optimizer, scheduler: torch.optim.lr_scheduler, device, confidence_threshold=0.9, n_classes=9, data_dir=None):
         self.model = model
         self.criterion = criterion
         self.optimizer = optimizer
+        self.scheduler = scheduler
         self.device = device
         self.confidence_threshold = confidence_threshold
         self.best_val_loss = float('inf')
@@ -389,6 +451,7 @@ class SimpleSSL:
         checkpoint = {
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict(),
             'val_loss': val_loss,
             'dice_score': avg_dice,
             'epoch': epoch + 1,
@@ -425,7 +488,7 @@ class SimpleSSL:
 
             # Train
             train_loss = self.train_epoch(labeled_loader, unlabeled_loader, unlabeled_train)
-            print(f"Training Loss: {train_loss:.4f}")
+            print(f"\nTraining Loss: {train_loss:.4f}")
 
             # Validate
             val_loss, avg_dice, class_dice = self.validate(val_loader, output_dir, epoch)
@@ -437,6 +500,10 @@ class SimpleSSL:
             print(f"Average Dice: {avg_dice:.4f}")
 
             elapsed = time.time() - start_time
+
+            # Update scheduler
+            self.scheduler.step()
+            print(f"Learning Rate: {self.scheduler.get_last_lr()[0]:.6f}")
             print(f"Epoch completed in {elapsed:.2f}s")
 
 
@@ -450,8 +517,12 @@ def train(option=2):
     augmentation.delete_augmented_images("../data")
     augmentation.main()
 
+    # Set save path
+    save_path = ("UNet3D" if option == 0 or option == 1 else "SwinUnetr")
+
     # Do actual training
     config = SSLTrainingConfig()
+    config.output_dir = config.output_dir / save_path  # Set different model saves based on option
     config.output_dir.mkdir(exist_ok=True)  # Make sure output dir exists
 
     print("Creating dataloaders...")
@@ -459,42 +530,61 @@ def train(option=2):
 
     print("Initializing model...")
 
-    # ============= OPTION 0 - LOCAL NOT PRETRAINED =============
+    # ============= OPTION 0 - SMALL UNET (not pretrained) =============
     if option == 0:
         model = get_unet3D()
-        optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+        model.to(config.device)
+        optimizer = config.optimizer(model.parameters(), lr=config.learning_rate)
+        scheduler = config.scheduler(optimizer, T_max=config.num_epochs)
         epoch = 0
         best_dice = 0
         all_dice = []
 
-    # ============= OPTION 1 - LOCAL PRETRAINED =============
-    if option == 1:
+    # ============= OPTION 1 - SMALL UNET (pretrained local) =============
+    elif option == 1:
         model = get_unet3D()
-        model, optimizer, epoch, best_dice, all_dice = load_pretrained_weights(model,
+        model, optimizer, scheduler, epoch, best_dice, all_dice = load_pretrained_weights(model,
                                                           modelStateDictPath=Path(f"{config.output_dir}/best_model.pth"),
-                                                          device=config.device, lr=config.learning_rate)
+                                                          config=config)
     # ============= OPTION 2 - swin unetr model from online weights =============
     elif option == 2:
         model = load_swin_unetr(num_classes=config.n_classes, pretrained=True)
         model.to(config.device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+        optimizer = config.optimizer(model.parameters(), lr=config.learning_rate)
+        scheduler = config.scheduler(optimizer, T_max=config.num_epochs)
         epoch = 0
         best_dice = 0
         all_dice = []
     # ============= OPTION 3 - swin unetr from local weights =============
     elif option == 3:
         model = load_swin_unetr(num_classes=config.n_classes, pretrained=False)
-        model, optimizer, epoch, best_dice, all_dice = load_pretrained_weights(model,
+        model, optimizer, scheduler, epoch, best_dice, all_dice = load_pretrained_weights(model,
                                                           modelStateDictPath=Path(
                                                               f"{config.output_dir}/best_model.pth"),
-                                                          device=config.device, lr=config.learning_rate)
+                                                          config=config)
+    else:
+        raise ValueError("Invalid option for training.")
 
-    criterion = CombinedLoss()
+    # SET CRITERION (2 options currently)
+    # criterion = CombinedLoss()
+    criterion = CombinedFocalDiceLoss()
 
-    trainer = SimpleSSL(model, criterion, optimizer, config.device, n_classes=config.n_classes, data_dir=config.data_dir)
+    trainer = SimpleSSL(model, criterion, optimizer, scheduler, config.device, n_classes=config.n_classes, data_dir=config.data_dir)
     trainer.best_dice = best_dice
     trainer.all_dice_scores = all_dice
     trainer.train(labeled_loader, unlabeled_loader, val_loader, config.num_epochs, config.output_dir, epoch_start=epoch)
+
+
+def test():
+    """
+    Test the previously generated models
+    :return:
+    """
+    # STEP 1 - Load untrained model
+    # STEP 2 - Load trained model
+    # STEP 3 - Test untrained model and trained model on various test scores
+    # STEP 4 - Output results and plot graphs (can get all val dice scores during training if you want this graph also)
+    pass
 
 
 if __name__ == '__main__':
