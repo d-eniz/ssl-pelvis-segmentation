@@ -182,7 +182,7 @@ def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, co
 
     # Set up preloaded scheduler
     scheduler = config.scheduler(optimizer, T_max=config.num_epochs)
-    scheduler_weights = data.get("shceduler_state_dict", None)
+    scheduler_weights = data.get("scheduler_state_dict", None)
     if scheduler_weights:
         scheduler.load_state_dict(scheduler_weights)
     else:
