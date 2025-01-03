@@ -8,11 +8,14 @@ from Semi_Supervised.SemiSupervisedLearning import get_unet3D
 
 # from config import TrainingConfig
 from Semi_Supervised.data_loaders import create_dataloaders
-from Semi_Supervised.config import SSLTrainingConfig as TrainingConfig
+from Supervised_learning.config import SLTrainingConfig
+
 import time
+import os
+
 
 # Load Configuration
-config = TrainingConfig()
+config = SLTrainingConfig()
 
 # Create DataLoaders
 labeled_loader, _, val_loader, _ = create_dataloaders(config)
@@ -77,14 +80,20 @@ for epoch in range(config.num_epochs):
     eta = time.strftime(
         "%Y-%m-%d %H:%M:%S", time.localtime(time.time() + remaining_time)
     )
-    print(f"ETA: {remaining_time / 3600:.2f} hours, @ {eta}\n")
+    remaining_hours = int(remaining_time // 3600)
+    remaining_minutes = int((remaining_time % 3600) // 60)
+    print(f"ETA: {remaining_hours}h{remaining_minutes}m, @ {eta}\n")
 
     # Update Scheduler
     scheduler.step()
 
 # Save the Model
+config.output_dir.mkdir(parents=True, exist_ok=True)
 torch.save(model.state_dict(), f"{config.output_dir}/unet_supervised.pth")
 
 print(
-    f"Total training time for {config.num_epochs} epochs: {total_training_time / 3600:.2f} hours"
-)
+f"""
+Total training time for {config.num_epochs} epochs: {total_training_time / 3600:.2f} hours
+Model saved to {config.output_dir}
+"""
+    )
