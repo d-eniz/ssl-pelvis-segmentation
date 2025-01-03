@@ -16,8 +16,8 @@ import os
 import random
 
 
-from data_loaders import create_dataloaders
-import augmentation
+from Semi_Supervised.data_loaders import create_dataloaders
+import Semi_Supervised.augmentation
 from monai.transforms import (
     KeepLargestConnectedComponent,
     FillHoles,
