@@ -41,14 +41,15 @@ class PelvicMRDataset(Dataset):
         """
         Loads the dataset images from
         """
-        #print(f"Scanning directory: {self.data_dir}")  # Debugging
+        print(f"Scanning directory: {self.data_dir}")  # Debugging
+
         image_files = sorted(list(self.data_dir.glob("*_img.nii")))
         label_files = {f.stem.replace("_mask", "") for f in self.data_dir.glob("*_mask.nii")}
 
         # Debugging
-        #print(f"Num images: {len(image_files)} - Num labels: {len(label_files)}")
-        #if not image_files or not label_files:
-        #    raise ValueError(f"No valid dataset files found in {self.data_dir}")
+        print(f"Num images: {len(image_files)} - Num labels: {len(label_files)}")
+        if not image_files or not label_files:
+            raise ValueError(f"No valid dataset files found in {self.data_dir}")
 
         labeled_images = [img for img in image_files if img.stem.replace("_img", "") in label_files]
         unlabeled_images = [img for img in image_files if img.stem.replace("_img", "") not in label_files]
