@@ -14,10 +14,10 @@ import time
 import warnings
 import os
 import random
-from Semi_Supervised.config import SSLTrainingConfig
 
-from Semi_Supervised.data_loaders import create_dataloaders
-import Semi_Supervised.augmentation
+
+from data_loaders import create_dataloaders
+import augmentation
 from monai.transforms import (
     KeepLargestConnectedComponent,
     FillHoles,
@@ -144,7 +144,7 @@ def get_unet3D(in_channels=1, n_classes=9):
     return model
 
 
-def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, config: SSLTrainingConfig) -> \
+def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, config) -> \
         (torch.nn.Module, torch.optim, int, float, list[float]):
     """
     Load pretrained weights (from a previous run) back onto a model and optimizer
@@ -591,6 +591,7 @@ def train(option=1):
     :param option: which model type to run
     :return:
     """
+    from config import SSLTrainingConfig
     # Get augmented images -- Comment/Uncomment if augmented images already made
     augmentation.delete_augmented_images("../data")
     augmentation.main()
@@ -643,6 +644,7 @@ def train(option=1):
     else:
         raise ValueError("Invalid option for training.")
 
+
     # SET CRITERION (2 options currently)
     # criterion = CombinedLoss()
     criterion = CombinedFocalDiceLoss()
@@ -663,76 +665,6 @@ def test():
     # STEP 3 - Test untrained model and trained model on various test scores
     # STEP 4 - Output results and plot graphs (can get all val dice scores during training if you want this graph also)
     pass
-
-def ensemble_predicitons():
-    """
-    Calculates ensemble predictions from both swin unetr and UNet models
-    :return:
-    """
-    config = SSLTrainingConfig()
-    _, _, val_loader, test_loader = create_dataloaders(config)
-
-
-    # GET UNET3D
-    config.output_dir = config.output_dir / "UNet3D"
-    model = get_unet3D()
-    model_UNET, optimizer, scheduler, epoch, best_dice, all_dice = load_pretrained_weights(model,
-                                                                                      modelStateDictPath=Path(
-                                                                                          f"{config.output_dir}/best_model.pth"),
-                                                                                      config=config)
-
-    # GET SWIN UNETR
-    config.output_dir = config.output_dir / "SwinUnetr"
-    model = load_swin_unetr(num_classes=config.n_classes, pretrained=False)
-    model_swin, optimizer, scheduler, epoch, best_dice, all_dice = load_pretrained_weights(model,
-                                                                                      modelStateDictPath=Path(
-                                                                                          f"{config.output_dir}/best_model.pth"),
-                                                                                      config=config)
-
-    # TESTING LOOP
-    model_UNET.eval()
-    model_swin.eval()
-
-    with torch.no_grad():
-
-        all_dice_scores = []
-        for batch in test_loader:
-            if not all(batch['is_labeled']):
-                # Somehow got unlabelled data in our val data
-                continue
-
-            images = batch['image'].to(config.device)
-            labels = batch['label'].to(config.device)
-
-            # Get predictions from both models
-            preds_unet = model_UNET(images)
-            preds_swin = model_swin(images)
-
-
-            # Convert logits to probabilities
-            probs_unet = F.softmax(preds_unet, dim=1)  # Assuming multi-class
-            probs_swin = F.softmax(preds_swin, dim=1)
-
-            # Ensemble by averaging probabilities
-            ensemble_probs = (probs_unet + probs_swin) / 2
-
-            ensemble_preds = torch.argmax(ensemble_probs, dim=1)
-
-            dice_scores = []
-            for class_idx in range(config.n_classes):
-                dice = SimpleSSL.calculate_dice_score(
-                    (ensemble_preds == class_idx).float(),
-                    (labels == class_idx).float()
-                )
-                dice_scores.append(dice)
-
-            all_dice_scores.append(dice_scores)
-
-        avg_dice_all = np.mean(all_dice_scores, axis=0)
-        print("Class-wise Dice scores:")
-        for i, dice in enumerate(avg_dice_all):
-            print(f"Class {i}: {dice:.4f}")
-    print(f"Average Dice: {np.mean(avg_dice_all):.4f}")
 
 
 if __name__ == '__main__':
