@@ -25,6 +25,7 @@ unlabeled_loader = None  # Don't want to use unlabeled data for supervised learn
 model = load_swin_unetr(num_classes=config.n_classes, pretrained=True)
 model.to(config.device)
 optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)  # Change this however you want
+scheduler = config.scheduler(optimizer, T_max=config.num_epochs / 4)
 epoch = 0
 best_dice = 0
 all_dice = []
@@ -33,7 +34,7 @@ all_dice = []
 criterion = CombinedLoss()  # Could also just use nn.CrossEntropyLoss() if don't want to include DICE in loss
 
 # Set up the trainer script
-trainer = SimpleSSL(model, criterion, optimizer, config.device, n_classes=config.n_classes, data_dir=config.data_dir)
+trainer = SimpleSSL(model, criterion, optimizer, scheduler, config.device, n_classes=config.n_classes, data_dir=config.data_dir)
 
 # Set the trainer to train
 trainer.train(labeled_loader, unlabeled_loader, val_loader, config.num_epochs, config.output_dir, epoch_start=epoch)

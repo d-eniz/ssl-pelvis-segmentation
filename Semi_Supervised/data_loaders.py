@@ -55,7 +55,7 @@ class PelvicMRDataset(Dataset):
         # Calculate split indices for labeled data
         total_labeled = len(labeled_images)
         train_split_labeled = int(self.train_test_val_split[0] * total_labeled)
-        val_split_labeled = train_split_labeled + int(self.train_test_val_split[1] * total_labeled)
+        val_split_labeled = train_split_labeled + int(self.train_test_val_split[2] * total_labeled)
 
         # Split labeled data
         labeled_train = labeled_images[:train_split_labeled]
@@ -139,9 +139,12 @@ def create_dataloaders(config) -> Tuple[DataLoader, DataLoader, DataLoader, Data
     :param config: (TrainingConfig): Training config data
     :return: labeled_dataloader, unlabeled_dataloader, val_dataloader, test_dataloader
     """
-    train_set = PelvicMRDataset(config.data_dir, mode='train', target_size=config.target_size, train_test_val_split=config.train_test_val_split, seed=config.seed)
-    val_set = PelvicMRDataset(config.data_dir, mode='val', target_size=config.target_size, train_test_val_split=config.train_test_val_split, seed=config.seed)
-    test_set = PelvicMRDataset(config.data_dir, mode='test', target_size=config.target_size, train_test_val_split=config.train_test_val_split, seed=config.seed)
+    train_set = PelvicMRDataset(config.data_dir, mode='train', target_size=config.target_size,
+                               train_test_val_split=config.train_test_val_split, seed=config.seed)
+    val_set = PelvicMRDataset(config.data_dir, mode='val', target_size=config.target_size,
+                             train_test_val_split=config.train_test_val_split, seed=config.seed)
+    test_set = PelvicMRDataset(config.data_dir, mode='test', target_size=config.target_size,
+                              train_test_val_split=config.train_test_val_split, seed=config.seed)
 
     # Get indices for labeled and unlabeled data
     labeled_indices = [i for i, is_labeled in enumerate(train_set.is_labeled) if is_labeled]
@@ -152,17 +155,23 @@ def create_dataloaders(config) -> Tuple[DataLoader, DataLoader, DataLoader, Data
         batch_size=config.batch_size,
         sampler=SubsetRandomSampler(labeled_indices),
         num_workers=config.num_workers,
-        pin_memory=config.pin_memory
+        pin_memory=config.pin_memory,
+        drop_last=False  # Ensure we don't drop the last incomplete batch
     )
 
-    if len(unlabeled_indices) != 0:
+    if len(unlabeled_indices) > 0:
         unlabeled_loader = DataLoader(
             train_set,
             batch_size=config.batch_size,
             sampler=SubsetRandomSampler(unlabeled_indices),
             num_workers=config.num_workers,
-            pin_memory=config.pin_memory
+            pin_memory=config.pin_memory,
+            drop_last=False  # Ensure we don't drop the last incomplete batch
         )
+        # Verify the total number of samples that will be processed
+        total_unlabeled_samples = len(unlabeled_loader) * config.batch_size
+        if total_unlabeled_samples < len(unlabeled_indices):
+            total_unlabeled_samples += len(unlabeled_indices) % config.batch_size
     else:
         unlabeled_loader = None
 
@@ -171,7 +180,8 @@ def create_dataloaders(config) -> Tuple[DataLoader, DataLoader, DataLoader, Data
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=config.num_workers,
-        pin_memory=config.pin_memory
+        pin_memory=config.pin_memory,
+        drop_last=False
     )
 
     test_loader = DataLoader(
@@ -179,7 +189,8 @@ def create_dataloaders(config) -> Tuple[DataLoader, DataLoader, DataLoader, Data
         batch_size=config.batch_size,
         shuffle=False,
         num_workers=config.num_workers,
-        pin_memory=config.pin_memory
+        pin_memory=config.pin_memory,
+        drop_last=False
     )
 
     return labeled_loader, unlabeled_loader, val_loader, test_loader

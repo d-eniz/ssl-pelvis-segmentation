@@ -18,6 +18,11 @@ from config import SSLTrainingConfig
 
 from data_loaders import create_dataloaders
 import augmentation
+from monai.transforms import (
+    KeepLargestConnectedComponent,
+    FillHoles,
+    RemoveSmallObjects,
+)
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # Get rid of duplicate DLL issues
 
@@ -311,6 +316,11 @@ class SimpleSSL:
         self.epoch_since_last_improvement = 0
         self.best_dice_epoch = 0
 
+        labels = list(range(1, n_classes))
+        self.keep_largest = KeepLargestConnectedComponent(applied_labels=labels)
+        self.fill_holes = FillHoles(applied_labels=labels)
+        self.remove_small = RemoveSmallObjects(min_size=64)
+
     def generate_pseudo_labels(self, unlabeled_loader):
         """
         Generate pseudo labels for the data in the unlabeled loader.
@@ -346,6 +356,32 @@ class SimpleSSL:
                 # Free GPU memory
                 del images, outputs, confidence, labels, mask
                 torch.cuda.empty_cache()
+
+    def post_process(self, preds):
+        """
+        Does post processing on segmentation predictions
+        :param preds: (torch tensor: shape(B, D, H, W)) - tensor containing integer predictions for labels
+        :return: post processed image
+        """
+        batch_size = preds.shape[0]
+        processed_masks = []
+
+        for batch_idx in range(batch_size):
+            # Get single batch
+            current_mask = preds[batch_idx]
+
+            # Apply post-processing transforms
+            processed = self.keep_largest(current_mask)
+            processed = self.fill_holes(processed)
+            processed = self.remove_small(processed)
+
+            # Add processed mask to list
+            processed_masks.append(processed)
+
+        # Stack processed masks back into batch
+        return torch.stack(processed_masks, dim=0)
+
+
 
     def train_epoch(self, labeled_loader, unlabeled_loader, unlabeled_train):
         """
@@ -404,6 +440,7 @@ class SimpleSSL:
         self.model.eval()
         total_loss = 0
         all_dice_scores = []
+        all_post_dice_scores = []
 
         with torch.no_grad():
             for batch in val_loader:
@@ -429,6 +466,19 @@ class SimpleSSL:
                     )
                     dice_scores.append(dice)
 
+                if epoch % 5 == 0:  # Apply post-processing every 5 epochs
+                    post_preds = self.post_process(preds)
+
+                    # Get New Dice Scores
+                    dice_scores_post_processed = []
+                    for class_idx in range(self.n_classes):
+                        dice = self.calculate_dice_score(
+                            (post_preds == class_idx).float(),
+                            (labels == class_idx).float()
+                        )
+                        dice_scores_post_processed.append(dice)
+
+                    all_post_dice_scores.append(dice_scores_post_processed)
                 all_dice_scores.append(dice_scores)
                 total_loss += loss.item()
 
@@ -436,9 +486,19 @@ class SimpleSSL:
         avg_dice = np.mean(all_dice_scores, axis=0)
         avg_val_loss = total_loss / len(val_loader)
 
-        # Save best model
+        # Get post metrics
+        if epoch % 5 == 0:
+            post_avg_dice = np.mean(all_post_dice_scores, axis=0)
+            print("\nClass-wise Dice Scores (Raw → Post-processed):")
+            for i, (og_dice, post_dice) in enumerate(zip(avg_dice, post_avg_dice)):
+                diff = post_dice - og_dice
+                print(f"Class {i + 1}: {og_dice:.4f} → {post_dice:.4f} "
+                      f"({'↑' if diff > 0 else '↓'}{abs(diff):.4f})")
+
+
         avg_dice_all = np.mean(avg_dice)
         self.all_dice_scores.append(avg_dice_all)
+        # Save best model
         if avg_dice_all > self.best_dice:
             self.best_dice = avg_dice_all
             self.best_dice_epoch = epoch
@@ -451,7 +511,8 @@ class SimpleSSL:
                 
         return avg_val_loss, avg_dice_all, avg_dice
 
-    def calculate_dice_score(self, pred, target):
+    @staticmethod
+    def calculate_dice_score(pred, target):
         smooth = 1e-5
         intersection = torch.sum(pred * target)
         union = torch.sum(pred) + torch.sum(target)
@@ -524,7 +585,7 @@ class SimpleSSL:
                 break
 
 
-def train(option=2):
+def train(option=1):
     """
     Main SSL training script
     :param option: which model type to run
@@ -602,6 +663,76 @@ def test():
     # STEP 3 - Test untrained model and trained model on various test scores
     # STEP 4 - Output results and plot graphs (can get all val dice scores during training if you want this graph also)
     pass
+
+def ensemble_predicitons():
+    """
+    Calculates ensemble predictions from both swin unetr and UNet models
+    :return:
+    """
+    config = SSLTrainingConfig()
+    _, _, val_loader, test_loader = create_dataloaders(config)
+
+
+    # GET UNET3D
+    config.output_dir = config.output_dir / "UNet3D"
+    model = get_unet3D()
+    model_UNET, optimizer, scheduler, epoch, best_dice, all_dice = load_pretrained_weights(model,
+                                                                                      modelStateDictPath=Path(
+                                                                                          f"{config.output_dir}/best_model.pth"),
+                                                                                      config=config)
+
+    # GET SWIN UNETR
+    config.output_dir = config.output_dir / "SwinUnetr"
+    model = load_swin_unetr(num_classes=config.n_classes, pretrained=False)
+    model_swin, optimizer, scheduler, epoch, best_dice, all_dice = load_pretrained_weights(model,
+                                                                                      modelStateDictPath=Path(
+                                                                                          f"{config.output_dir}/best_model.pth"),
+                                                                                      config=config)
+
+    # TESTING LOOP
+    model_UNET.eval()
+    model_swin.eval()
+
+    with torch.no_grad():
+
+        all_dice_scores = []
+        for batch in test_loader:
+            if not all(batch['is_labeled']):
+                # Somehow got unlabelled data in our val data
+                continue
+
+            images = batch['image'].to(config.device)
+            labels = batch['label'].to(config.device)
+
+            # Get predictions from both models
+            preds_unet = model_UNET(images)
+            preds_swin = model_swin(images)
+
+
+            # Convert logits to probabilities
+            probs_unet = F.softmax(preds_unet, dim=1)  # Assuming multi-class
+            probs_swin = F.softmax(preds_swin, dim=1)
+
+            # Ensemble by averaging probabilities
+            ensemble_probs = (probs_unet + probs_swin) / 2
+
+            ensemble_preds = torch.argmax(ensemble_probs, dim=1)
+
+            dice_scores = []
+            for class_idx in range(config.n_classes):
+                dice = SimpleSSL.calculate_dice_score(
+                    (ensemble_preds == class_idx).float(),
+                    (labels == class_idx).float()
+                )
+                dice_scores.append(dice)
+
+            all_dice_scores.append(dice_scores)
+
+        avg_dice_all = np.mean(all_dice_scores, axis=0)
+        print("Class-wise Dice scores:")
+        for i, dice in enumerate(avg_dice_all):
+            print(f"Class {i}: {dice:.4f}")
+    print(f"Average Dice: {np.mean(avg_dice_all):.4f}")
 
 
 if __name__ == '__main__':
