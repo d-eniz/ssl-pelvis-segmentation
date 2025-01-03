@@ -14,10 +14,10 @@ import time
 import warnings
 import os
 import random
-from config import SSLTrainingConfig
+from Semi_Supervised.config import SSLTrainingConfig
 
-from data_loaders import create_dataloaders
-import augmentation
+from Semi_Supervised.data_loaders import create_dataloaders
+import Semi_Supervised.augmentation
 from monai.transforms import (
     KeepLargestConnectedComponent,
     FillHoles,
@@ -508,7 +508,7 @@ class SimpleSSL:
             self.epoch_since_last_improvement = 0
         else:
             self.epoch_since_last_improvement += 1
-                
+
         return avg_val_loss, avg_dice_all, avg_dice
 
     @staticmethod
@@ -577,7 +577,7 @@ class SimpleSSL:
             self.scheduler.step()
             print(f"Learning Rate: {self.scheduler.get_last_lr()[0]:.6f}")
             print(f"Epoch completed in {elapsed:.2f}s")
-            
+
             if self.epoch_since_last_improvement >= self.patience:
                 # Early stopping initiated
                 print(f"Early stopping due to no model improvement at epoch {epoch} with best Dice {self.best_dice} "
