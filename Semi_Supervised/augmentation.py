@@ -9,8 +9,8 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import nibabel as nib
 from pathlib import Path
-from data_loaders import create_dataloaders
-from config import SSLTrainingConfig
+from Semi_Supervised.data_loaders import create_dataloaders
+from Semi_Supervised.config import SSLTrainingConfig
 import os
 import numpy as np
 from monai.transforms import (
