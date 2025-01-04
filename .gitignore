@@ -1,4 +1,5 @@
 data/
+create_gif.py
 
 *.png
 *.gif
