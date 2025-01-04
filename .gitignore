@@ -1,5 +1,8 @@
 data/
 
+*.png
+*.gif
+
 # Created by https://www.toptal.com/developers/gitignore/api/vs,python
 # Edit at https://www.toptal.com/developers/gitignore?templates=vs,python
 
