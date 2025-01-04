@@ -29,10 +29,8 @@ SemiSupervisedLearning.test()  # (Yet to be implemented)
 
 Supervised Learning:
 
-![gif1](Supervised_learning\output\examples\sample_1_batch_1_mode_2.gif)
+![gif1](https://github.com/d-eniz/mphy0041-pelvis-segmentation/blob/main/Supervised_learning/output/examples/sample_13_batch_0_mode_2.gif?raw=true)
 
-![gif2](Supervised_learning\output\examples\sample_8_batch_1_mode_2.gif)
+![gif2](https://github.com/d-eniz/mphy0041-pelvis-segmentation/blob/main/Supervised_learning/output/examples/sample_16_batch_2_mode_2.gif?raw=true)
 
-![gif3](Supervised_learning\output\examples\sample_13_batch_0_mode_2.gif)
-
-![gif4](Supervised_learning\output\examples\sample_16_batch_2_mode_2.gif)
+![gif3](https://github.com/d-eniz/mphy0041-pelvis-segmentation/blob/main/Supervised_learning/output/examples/sample_1_batch_1_mode_2.gif?raw=true)
