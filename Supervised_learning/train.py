@@ -1,3 +1,9 @@
+"""
+THIS SCRIPT IS NO LONGER USED.
+USE SupervisedLearning.py
+AND main.py INSTEAD.
+"""
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
