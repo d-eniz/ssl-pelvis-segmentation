@@ -3,8 +3,8 @@ A script to carry out testing on the models
 """
 from pathlib import Path
 
-from Semi_Supervised.config import SSLTrainingConfig
-from Semi_Supervised.SemiSupervisedLearning import get_unet3D, load_pretrained_weights, load_swin_unetr
+# from config import SSLTrainingConfig
+from Semi_Supervised.SemiSupervisedLearning import *
 
 import torch
 import torch.nn.functional as F
@@ -12,8 +12,6 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 import numpy as np
 
-from Semi_Supervised.data_loaders import create_dataloaders
-import textwrap
 
 # Outline to show what data is returned
 data_outline = [
@@ -47,9 +45,12 @@ def get_predictions(models, test_loader, config):
         model.eval()
 
     with torch.no_grad():
+        scores = [{"dice_scores": [], "SSIM": [], "PSNR": []} for _ in range(len(models) + 1)]
         for batch_num, batch in enumerate(test_loader):
 
             print(f"\rProcessing batch {batch_num+1}/{len(test_loader)}", end="")
+
+            probs = []
 
             if not all(batch['is_labeled']):
                 # Somehow got unlabelled data in our test data
@@ -57,10 +58,6 @@ def get_predictions(models, test_loader, config):
 
             images = batch['image'].to(config.device)
             labels = batch['label'].to(config.device)
-
-            # Variables for models
-            probs = []
-            scores = [{"dice_scores": [], "SSIM": [], "PSNR": []} for _ in range(len(models) + 1)]
 
             # Get predictions from both models
             for i, model in enumerate(models):
@@ -72,11 +69,12 @@ def get_predictions(models, test_loader, config):
 
                 # Get metrics for one model
                 dice_scores, SSIM, PSNR = calculate_metrics(prob, labels, config)
+
                 scores[i]["dice_scores"].append(dice_scores)
                 scores[i]["SSIM"].append(SSIM)
                 scores[i]["PSNR"].append(PSNR)
 
-                if batch_num == 5:
+                if batch_num == 12:
                     # Set graphs for the first image only
                     graphs = get_graphs(images.cpu().numpy(), labels.cpu().numpy(), prob)
                     metrics[i]["images"] = graphs
@@ -88,7 +86,7 @@ def get_predictions(models, test_loader, config):
             scores[-1]["SSIM"].append(SSIM)
             scores[-1]["PSNR"].append(PSNR)
 
-            if batch_num == 5:
+            if batch_num == 12:
                 # Set graphs for the first image only
                 graphs = get_graphs(images.cpu().numpy(), labels.cpu().numpy(), prob)
                 metrics[-1]["images"] = graphs
@@ -152,46 +150,29 @@ def get_graphs(image, label, probs):
     preds = torch.argmax(probs, dim=1).cpu().numpy()  # Get class predictions
     preds = np.squeeze(preds[0])  # Remove batch dim -> (160,160,32)
 
-    def view_slice(ax, slice_idx, orientation, data, title, cmap='gray'):
-        if orientation == 'axial':
-            slice_data = data[:, :, slice_idx]  # (160,160) slice
-        elif orientation == 'coronal':
-            slice_data = data[:, slice_idx, :]  # (160,32) slice
-        elif orientation == 'sagittal':
-            slice_data = data[slice_idx, :, :]  # (160,32) slice
-        else:
-            raise ValueError("Invalid orientation. Choose from 'axial', 'coronal', or 'sagittal'.")
+    # Get evenly spaced axial slice indices
+    num_slices = image.shape[2]  # Number of axial slices
+    slice_indices = np.linspace(0, num_slices - 1, 5, dtype=int)
 
-        ax.imshow(slice_data, cmap=cmap)
-        ax.set_title(f"{title} - {orientation} slice {slice_idx}")
-        ax.axis('off')
-
-    # Create the figure and axes
+    # Create the figure and axes for each plot (image, true label, predicted label)
     fig, axes = plt.subplots(3, 5, figsize=(15, 9))
 
-    # Define slice orientations and their corresponding dimensions
-    orientations = ['axial', 'coronal', 'sagittal']
-    slice_counts = {
-        'axial': image.shape[2],  # 32 slices
-        'coronal': image.shape[1],  # 160 slices
-        'sagittal': image.shape[0]  # 160 slices
-    }
+    # Plot each axial slice
+    for i, slice_idx in enumerate(slice_indices):
+        # Image slices
+        axes[0, i].imshow(image[:, :, slice_idx], cmap='gray')
+        axes[0, i].set_title(f"Image - slice {slice_idx}")
+        axes[0, i].axis('off')
 
-    # Create visualizations for each orientation and data type
-    for i, orientation in enumerate(orientations):
-        # Get evenly spaced slice indices for each orientation
-        slice_indices = np.linspace(0, slice_counts[orientation] - 1, 5, dtype=int)
+        # True label slices
+        axes[1, i].imshow(label[:, :, slice_idx], cmap='viridis')
+        axes[1, i].set_title(f"True Label - slice {slice_idx}")
+        axes[1, i].axis('off')
 
-        for j, slice_idx in enumerate(slice_indices):
-            # Image slices
-            if i == 0:
-                view_slice(axes[i, j], slice_idx, orientation, image, "Image", cmap='gray')
-            # True label slices
-            elif i == 1:
-                view_slice(axes[i, j], slice_idx, orientation, label, "True Label", cmap='viridis')
-            # Predicted label slices
-            else:
-                view_slice(axes[i, j], slice_idx, orientation, preds, "Predicted Label", cmap='viridis')
+        # Predicted label slices
+        axes[2, i].imshow(preds[:, :, slice_idx], cmap='viridis')
+        axes[2, i].set_title(f"Predicted Label - slice {slice_idx}")
+        axes[2, i].axis('off')
 
     plt.tight_layout()
     return fig
@@ -312,6 +293,7 @@ def display_model_comparisons(data_outline, model_names):
 
     # Add more padding at the top of the figure
     fig.subplots_adjust(top=0.95)
+    # fig.savefig("outputImage")
 
     fig.show()
 
@@ -326,8 +308,9 @@ def test_SSL():
     # Load whichever pretrained models you want
     models = []
     config = SSLTrainingConfig()
-    config.batch_size = 1
     _, _, val_loader, test_loader = create_dataloaders(config)
+
+    og_path = config.output_dir
 
     # GET UNET3D
     config.output_dir = config.output_dir / "UNet3D"
@@ -338,9 +321,10 @@ def test_SSL():
                                                                                            config=config)
 
     models.append(model_UNET)
+    models.append(model_UNET)
 
     # GET SWIN UNETR
-    config.output_dir = config.output_dir / "SwinUnetr"
+    config.output_dir = og_path / "SwinUnetr"
     model = load_swin_unetr(num_classes=config.n_classes, pretrained=False)
     model_swin, optimizer, scheduler, epoch, best_dice, all_dice = load_pretrained_weights(model,
                                                                                            modelStateDictPath=Path(

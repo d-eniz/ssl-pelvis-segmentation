@@ -236,7 +236,7 @@ def main():
 
 
 if __name__ == "__main__":
-    delete_augmented_images("../data")
+    delete_augmented_images(SSLTrainingConfig.data_dir)
     main()
 
 

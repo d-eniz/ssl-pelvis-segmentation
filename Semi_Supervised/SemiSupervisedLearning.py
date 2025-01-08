@@ -15,9 +15,10 @@ import warnings
 import os
 import random
 
-
+from Semi_Supervised import augmentation
 from Semi_Supervised.data_loaders import create_dataloaders
-import Semi_Supervised.augmentation
+from Semi_Supervised.config import SSLTrainingConfig
+
 from monai.transforms import (
     KeepLargestConnectedComponent,
     FillHoles,
@@ -591,9 +592,8 @@ def train(option=1):
     :param option: which model type to run
     :return:
     """
-    from config import SSLTrainingConfig
     # Get augmented images -- Comment/Uncomment if augmented images already made
-    augmentation.delete_augmented_images("../data")
+    augmentation.delete_augmented_images(SSLTrainingConfig.data_dir)
     augmentation.main()
 
     # Set save path
@@ -655,16 +655,6 @@ def train(option=1):
     trainer.train(labeled_loader, unlabeled_loader, val_loader, config.num_epochs, config.output_dir, epoch_start=epoch)
 
 
-def test():
-    """
-    Test the previously generated models
-    :return:
-    """
-    # STEP 1 - Load untrained model
-    # STEP 2 - Load trained model
-    # STEP 3 - Test untrained model and trained model on various test scores
-    # STEP 4 - Output results and plot graphs (can get all val dice scores during training if you want this graph also)
-    pass
 
 
 if __name__ == '__main__':
