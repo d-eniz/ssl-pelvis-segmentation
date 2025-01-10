@@ -491,7 +491,7 @@ class SimpleSSL:
             # Generate pseudo-labels
             unlabeled_train = False
             if unlabeled_loader is not None and epoch > 18 and epoch % 2 == 0:  # Let model train for x epochs on just labelled before using unlabelled then only use unlabelled data every 2 epochs
-                # if unlabeled_loader is not None:
+            # if unlabeled_loader is not None:
                 unlabeled_train = True
                 self.generate_pseudo_labels(unlabeled_loader)
 
@@ -539,7 +539,7 @@ def train(option=1, ratio_unlabelled=1):
     # Do actual training
     config = SSLTrainingConfig()
     config.output_dir = config.output_dir / save_path  # Set different model saves based on option
-    config.output_dir.mkdir(exist_ok=True)  # Make sure output dir exists
+    config.output_dir.mkdir(parents=True, exist_ok=True)  # Make sure output dir exists
 
     print("Creating dataloaders...")
     labeled_loader, unlabeled_loader, val_loader, test_loader = create_dataloaders(config)

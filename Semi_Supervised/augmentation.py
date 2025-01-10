@@ -142,7 +142,7 @@ def main(ratio_unlabelled=1):
     transform = get_monai_transforms(image_size=config.target_size)
 
     # Step 2 - Apply augmentations to data
-    for count in range(1):
+    for count in range(ratio_unlabelled):
         for batch in labeled_dataloader:
             images = batch['image']  # Extract images
             paths = batch['code']  # Ensure `paths` contains the original file paths
@@ -156,7 +156,7 @@ def main(ratio_unlabelled=1):
                 augmented_image = apply_augmentations_monai(image, transform)
 
                 # Step 3 - Save augmented images back to file
-                save_augmented_image(paths[i], augmented_image, save_dir)
+                save_augmented_image(str(count) + paths[i], augmented_image, save_dir)
 
 
 if __name__ == "__main__":
