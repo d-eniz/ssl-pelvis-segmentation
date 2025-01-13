@@ -1,23 +1,21 @@
 """
 Main training script for SSL
 """
-from dataclasses import dataclass
+import os
+import time
 from pathlib import Path
-from typing import Tuple
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-import nibabel as nib
-import numpy as np
-import time
-import warnings
-import os
-import random
-from config import SSLTrainingConfig
+from monai.transforms import (
+    FillHoles,
+)
 
-from data_loaders import create_dataloaders
-import augmentation
+from Semi_Supervised import augmentation
+from Semi_Supervised.config import SSLTrainingConfig
+from Semi_Supervised.data_loaders import create_dataloaders
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # Get rid of duplicate DLL issues
 
@@ -120,26 +118,26 @@ def dice_loss(pred, target, smooth=1e-5):
 def get_unet3D(in_channels=1, n_classes=9):
     """
     Get a standard UNet 3D model from Monai
-    :param in_channels:
-    :param n_classes:
-    :return:
+    :param in_channels: number of image channels in (1 for greyscale, 3 for rgb)
+    :param n_classes: number of classes to predict
+    :return: model - initialised UNet3D model
     """
     from monai.networks.nets import UNet
     from monai.networks.layers import Norm
 
     model = UNet(
-        spatial_dims=3,
-        in_channels=in_channels,
-        out_channels=n_classes,
-        channels=(32, 64, 128, 256),
-        strides=(2, 2, 2),
-        num_res_units=2,
-        norm=Norm.BATCH
+        spatial_dims=3,  # Use 3D convolutions
+        in_channels=in_channels,  # Number of input channels
+        out_channels=n_classes,  # Number of output classes
+        channels=(32, 64, 128, 256, 512),  # Feature map channels per layer
+        strides=(2, 2, 2, 2),  # Down-sampling strides
+        num_res_units=2,  # Residual units per layer
+        norm=Norm.BATCH  # Batch Normalization
     )
     return model
 
 
-def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, config: SSLTrainingConfig) -> \
+def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, config) -> \
         (torch.nn.Module, torch.optim, int, float, list[float]):
     """
     Load pretrained weights (from a previous run) back onto a model and optimizer
@@ -181,7 +179,7 @@ def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, co
         print("No optimizer weights found in checkpoint, using default.")
 
     # Set up preloaded scheduler
-    scheduler = config.scheduler(optimizer, T_max=config.num_epochs/4)
+    scheduler = config.scheduler(optimizer, T_max=config.num_epochs / 4)
     scheduler_weights = data.get("scheduler_state_dict", None)
     if scheduler_weights:
         scheduler.load_state_dict(scheduler_weights)
@@ -191,57 +189,7 @@ def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, co
     return model, optimizer, scheduler, int(epoch), dice_score, all_dice_scores
 
 
-def get_unet3D_larger(
-        in_channels=1,
-        n_classes=9,
-        base_channels=64,
-        num_res_units=3,
-        dropout_prob=0.2
-) -> (torch.nn.Module, torch.optim, int):
-    """
-    Loads a unet3D model and optimizer
-
-    Parameters:
-        in_channels (int): Number of input channels (e.g., 1 for grayscale, 3 for RGB).
-        n_classes (int): Number of output classes for segmentation.
-        base_channels (int): Number of filters in the first layer, will double at each subsequent layer.
-        num_res_units (int): Number of residual units per layer.
-        dropout_prob (float): Dropout probability for regularization.
-
-    Returns:
-        model (torch.nn.Module): A 3D UNet model.
-        optimizer (torch.optim): An optimizer
-    """
-    from monai.networks.nets import UNet
-    from monai.networks.layers import Norm
-
-    # Define the number of channels in each layer (doubles at each level)
-    channels = (
-        base_channels,
-        base_channels * 2,
-        base_channels * 4,
-        base_channels * 8,
-        base_channels * 16
-    )
-
-    # Define the strides for downsampling at each layer
-    strides = (2, 2, 2, 2)
-
-    model = UNet(
-        spatial_dims=3,
-        in_channels=in_channels,
-        out_channels=n_classes,
-        channels=channels,
-        strides=strides,
-        num_res_units=num_res_units,
-        act="RELU",
-        norm=Norm.BATCH,
-        dropout=dropout_prob,
-    )
-    return model
-
-
-def load_swin_unetr(num_classes: int=9, pretrained=True) -> torch.nn.Module:
+def load_swin_unetr(num_classes: int = 9, pretrained=True) -> torch.nn.Module:
     """
     Loads the pretrained swin_unetr_btcv_segmentation model from Monai link: https://monai.io/model-zoo.html
     :param: num_classes: Number of output classes
@@ -291,8 +239,9 @@ def softmax_confidence(predictions, T=2.0):
 
 class SimpleSSL:
     """
-    Main script for Semi Supervised Learning
+    Main class for Semi Supervised Learning
     """
+
     def __init__(self, model, criterion, optimizer, scheduler: torch.optim.lr_scheduler, device,
                  confidence_threshold=0.9, n_classes=9, data_dir=None, patience=15):
         self.model = model
@@ -310,6 +259,9 @@ class SimpleSSL:
         self.patience = patience
         self.epoch_since_last_improvement = 0
         self.best_dice_epoch = 0
+
+        labels = list(range(1, n_classes))
+        self.fill_holes = FillHoles(applied_labels=labels)
 
     def generate_pseudo_labels(self, unlabeled_loader):
         """
@@ -346,6 +298,28 @@ class SimpleSSL:
                 # Free GPU memory
                 del images, outputs, confidence, labels, mask
                 torch.cuda.empty_cache()
+
+    def post_process(self, preds):
+        """
+        Does post processing on segmentation predictions
+        :param preds: (torch tensor: shape(B, D, H, W)) - tensor containing integer predictions for labels
+        :return: post processed image
+        """
+        batch_size = preds.shape[0]
+        processed_masks = []
+
+        for batch_idx in range(batch_size):
+            # Get single batch
+            current_mask = preds[batch_idx]
+
+            # Apply post-processing transforms
+            processed = self.fill_holes(current_mask)
+
+            # Add processed mask to list
+            processed_masks.append(processed)
+
+        # Stack processed masks back into batch
+        return torch.stack(processed_masks, dim=0)
 
     def train_epoch(self, labeled_loader, unlabeled_loader, unlabeled_train):
         """
@@ -389,7 +363,7 @@ class SimpleSSL:
 
                 loss = self.criterion(outputs, labels)
                 loss = (loss * confidence * mask).mean()  # Apply confidence and mask
-                loss = loss * 0.8  # Scale down pseudo-labeled loss - TODO: Make this dynamic
+                loss = loss * 0.8  # Scale down pseudo-labeled loss
                 loss.backward()
                 self.optimizer.step()
 
@@ -404,6 +378,7 @@ class SimpleSSL:
         self.model.eval()
         total_loss = 0
         all_dice_scores = []
+        all_post_dice_scores = []
 
         with torch.no_grad():
             for batch in val_loader:
@@ -429,6 +404,19 @@ class SimpleSSL:
                     )
                     dice_scores.append(dice)
 
+                if epoch % 5 == 0:  # Apply post-processing every 5 epochs
+                    post_preds = self.post_process(preds)
+
+                    # Get New Dice Scores
+                    dice_scores_post_processed = []
+                    for class_idx in range(self.n_classes):
+                        dice = self.calculate_dice_score(
+                            (post_preds == class_idx).float(),
+                            (labels == class_idx).float()
+                        )
+                        dice_scores_post_processed.append(dice)
+
+                    all_post_dice_scores.append(dice_scores_post_processed)
                 all_dice_scores.append(dice_scores)
                 total_loss += loss.item()
 
@@ -436,9 +424,18 @@ class SimpleSSL:
         avg_dice = np.mean(all_dice_scores, axis=0)
         avg_val_loss = total_loss / len(val_loader)
 
-        # Save best model
+        # Get post metrics
+        if epoch % 5 == 0:
+            post_avg_dice = np.mean(all_post_dice_scores, axis=0)
+            print("\nClass-wise Dice Scores (Raw → Post-processed):")
+            for i, (og_dice, post_dice) in enumerate(zip(avg_dice, post_avg_dice)):
+                diff = post_dice - og_dice
+                print(f"Class {i + 1}: {og_dice:.4f} → {post_dice:.4f} "
+                      f"({'↑' if diff > 0 else '↓'}{abs(diff):.4f})")
+
         avg_dice_all = np.mean(avg_dice)
         self.all_dice_scores.append(avg_dice_all)
+        # Save best model
         if avg_dice_all > self.best_dice:
             self.best_dice = avg_dice_all
             self.best_dice_epoch = epoch
@@ -448,10 +445,11 @@ class SimpleSSL:
             self.epoch_since_last_improvement = 0
         else:
             self.epoch_since_last_improvement += 1
-                
+
         return avg_val_loss, avg_dice_all, avg_dice
 
-    def calculate_dice_score(self, pred, target):
+    @staticmethod
+    def calculate_dice_score(pred, target):
         smooth = 1e-5
         intersection = torch.sum(pred * target)
         union = torch.sum(pred) + torch.sum(target)
@@ -516,7 +514,7 @@ class SimpleSSL:
             self.scheduler.step()
             print(f"Learning Rate: {self.scheduler.get_last_lr()[0]:.6f}")
             print(f"Epoch completed in {elapsed:.2f}s")
-            
+
             if self.epoch_since_last_improvement >= self.patience:
                 # Early stopping initiated
                 print(f"Early stopping due to no model improvement at epoch {epoch} with best Dice {self.best_dice} "
@@ -524,15 +522,16 @@ class SimpleSSL:
                 break
 
 
-def train(option=2):
+def train(option=1, ratio_unlabelled=1):
     """
     Main SSL training script
     :param option: which model type to run
+    :param ratio_unlabelled: ratio of unlabelled to labelled data to use
     :return:
     """
     # Get augmented images -- Comment/Uncomment if augmented images already made
-    augmentation.delete_augmented_images("../data")
-    augmentation.main()
+    augmentation.delete_augmented_images(SSLTrainingConfig.data_dir)
+    augmentation.main(ratio_unlabelled)
 
     # Set save path
     save_path = ("UNet3D" if option == 0 or option == 1 else "SwinUnetr")
@@ -540,7 +539,7 @@ def train(option=2):
     # Do actual training
     config = SSLTrainingConfig()
     config.output_dir = config.output_dir / save_path  # Set different model saves based on option
-    config.output_dir.mkdir(exist_ok=True)  # Make sure output dir exists
+    config.output_dir.mkdir(parents=True, exist_ok=True)  # Make sure output dir exists
 
     print("Creating dataloaders...")
     labeled_loader, unlabeled_loader, val_loader, test_loader = create_dataloaders(config)
@@ -552,7 +551,7 @@ def train(option=2):
         model = get_unet3D()
         model.to(config.device)
         optimizer = config.optimizer(model.parameters(), lr=config.learning_rate)
-        scheduler = config.scheduler(optimizer, T_max=config.num_epochs/4)
+        scheduler = config.scheduler(optimizer, T_max=config.num_epochs / 4)
         epoch = 0
         best_dice = 0
         all_dice = []
@@ -561,14 +560,15 @@ def train(option=2):
     elif option == 1:
         model = get_unet3D()
         model, optimizer, scheduler, epoch, best_dice, all_dice = load_pretrained_weights(model,
-                                                          modelStateDictPath=Path(f"{config.output_dir}/best_model.pth"),
-                                                          config=config)
+                                                                                          modelStateDictPath=Path(
+                                                                                              f"{config.output_dir}/best_model.pth"),
+                                                                                          config=config)
     # ============= OPTION 2 - swin unetr model from online weights =============
     elif option == 2:
         model = load_swin_unetr(num_classes=config.n_classes, pretrained=True)
         model.to(config.device)
         optimizer = config.optimizer(model.parameters(), lr=config.learning_rate)
-        scheduler = config.scheduler(optimizer, T_max=config.num_epochs/4)
+        scheduler = config.scheduler(optimizer, T_max=config.num_epochs / 4)
         epoch = 0
         best_dice = 0
         all_dice = []
@@ -576,9 +576,9 @@ def train(option=2):
     elif option == 3:
         model = load_swin_unetr(num_classes=config.n_classes, pretrained=False)
         model, optimizer, scheduler, epoch, best_dice, all_dice = load_pretrained_weights(model,
-                                                          modelStateDictPath=Path(
-                                                              f"{config.output_dir}/best_model.pth"),
-                                                          config=config)
+                                                                                          modelStateDictPath=Path(
+                                                                                              f"{config.output_dir}/best_model.pth"),
+                                                                                          config=config)
     else:
         raise ValueError("Invalid option for training.")
 
@@ -586,22 +586,11 @@ def train(option=2):
     # criterion = CombinedLoss()
     criterion = CombinedFocalDiceLoss()
 
-    trainer = SimpleSSL(model, criterion, optimizer, scheduler, config.device, n_classes=config.n_classes, data_dir=config.data_dir)
+    trainer = SimpleSSL(model, criterion, optimizer, scheduler, config.device, n_classes=config.n_classes,
+                        data_dir=config.data_dir)
     trainer.best_dice = best_dice
     trainer.all_dice_scores = all_dice
     trainer.train(labeled_loader, unlabeled_loader, val_loader, config.num_epochs, config.output_dir, epoch_start=epoch)
-
-
-def test():
-    """
-    Test the previously generated models
-    :return:
-    """
-    # STEP 1 - Load untrained model
-    # STEP 2 - Load trained model
-    # STEP 3 - Test untrained model and trained model on various test scores
-    # STEP 4 - Output results and plot graphs (can get all val dice scores during training if you want this graph also)
-    pass
 
 
 if __name__ == '__main__':

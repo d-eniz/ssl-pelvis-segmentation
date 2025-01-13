@@ -9,8 +9,8 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import nibabel as nib
 from pathlib import Path
-from data_loaders import create_dataloaders
-from config import SSLTrainingConfig
+from Semi_Supervised.data_loaders import create_dataloaders
+from Semi_Supervised.config import SSLTrainingConfig
 import os
 import numpy as np
 from monai.transforms import (
@@ -33,87 +33,6 @@ from monai.transforms import (
 )
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # Get rid of duplicate DLL issues
-
-
-def apply_augmentations_torch(image, p=0.5):
-    """
-    Apply augmentations suitable for 3D medical imaging data.
-
-    **NOTE** THIS IS THE OLD PYTORCH WAY OF DOING THIS - REPLACED BY MONAI TRANSFORMS
-    Args:
-        image: Tensor of shape (C, H, W, D) - 3D image volume
-        p: Probability of applying each augmentation
-
-    Returns:
-        Augmented image tensor of the same shape
-    """
-    if image.ndim != 4:
-        raise ValueError("Input image must be a 4D tensor of shape (C, H, W, D).")
-
-    # Store original shape
-    orig_shape = image.shape
-    device = image.device
-
-    # Convert to (C, D, H, W) for 3D operations
-    image = image.permute(0, 3, 1, 2)
-
-    # # 1. Random rotation (max 10 degrees) - implemented manually for 3D
-    angles = (torch.rand(3) * 10 - 5) * np.pi / 180  # Convert to radians
-
-    # Create affine matrix for rotation
-    cos_x, sin_x = torch.cos(angles[0]), torch.sin(angles[0])
-    cos_y, sin_y = torch.cos(angles[1]), torch.sin(angles[1])
-    cos_z, sin_z = torch.cos(angles[2]), torch.sin(angles[2])
-
-    # Rotation matrices
-    rot_x = torch.tensor([[1, 0, 0],
-                          [0, cos_x, -sin_x],
-                          [0, sin_x, cos_x]], device=device)
-
-    rot_y = torch.tensor([[cos_y, 0, sin_y],
-                          [0, 1, 0],
-                          [-sin_y, 0, cos_y]], device=device)
-
-    rot_z = torch.tensor([[cos_z, -sin_z, 0],
-                          [sin_z, cos_z, 0],
-                          [0, 0, 1]], device=device)
-
-    rotation_matrix = rot_z @ rot_y @ rot_x
-
-    # Create full affine matrix
-    affine_matrix = torch.eye(4, device=device)
-    affine_matrix[:3, :3] = rotation_matrix
-
-    # Create grid for sampling
-    grid = F.affine_grid(affine_matrix[:3].unsqueeze(0),
-                         image.unsqueeze(0).shape,
-                         align_corners=False)
-
-    # Apply transformation with trilinear interpolation
-    image = F.grid_sample(image.unsqueeze(0),
-                          grid,
-                          mode='bilinear',
-                          padding_mode='border',
-                          align_corners=False).squeeze(0)
-
-    # 4. Intensity augmentations
-    # Gamma correction (0.9-1.1)
-    gamma = 0.9 + torch.rand(1) * 0.2
-    image = torch.pow(image, gamma)
-
-    # Convert back to original format (C, H, W, D)
-    image = image.permute(0, 2, 1, 3)
-
-    # Ensure output matches input shape exactly
-    if image.shape != orig_shape:
-        image = F.interpolate(
-            image.permute(0, 3, 1, 2).unsqueeze(0),
-            size=orig_shape[1:],
-            mode='trilinear',
-            align_corners=False
-        ).squeeze(0).permute(0, 2, 1, 3)
-
-    return image
 
 
 def get_monai_transforms(prob=0.5, image_size=(160, 160, 32)):
@@ -207,7 +126,12 @@ def delete_augmented_images(data_path):
             print(f"Error deleting file {file}: {e}")
 
 
-def main():
+def main(ratio_unlabelled=1):
+    """
+    Main augmentation script
+    :param ratio_unlabelled: ratio of labelled ot unlabelled data (1:num_unlabelled)
+    :return:
+    """
     # Step 1 - Load training data
     config = SSLTrainingConfig()
     labeled_dataloader, _, _, _ = create_dataloaders(config=config)
@@ -218,25 +142,25 @@ def main():
     transform = get_monai_transforms(image_size=config.target_size)
 
     # Step 2 - Apply augmentations to data
-    for batch in labeled_dataloader:
-        images = batch['image']  # Extract images
-        paths = batch['code']  # Ensure `paths` contains the original file paths
+    for count in range(ratio_unlabelled):
+        for batch in labeled_dataloader:
+            images = batch['image']  # Extract images
+            paths = batch['code']  # Ensure `paths` contains the original file paths
 
-        for i, image in enumerate(images):
-            # Ensure image is in range [0, 1] for augmentation
-            image = image.clamp(0, 1)
+            for i, image in enumerate(images):
+                # Ensure image is in range [0, 1] for augmentation
+                image = image.clamp(0, 1)
 
-            # Apply augmentations
-            # augmented_image = apply_augmentations(image)
-            augmented_image = apply_augmentations_monai(image, transform)
+                # Apply augmentations
+                # augmented_image = apply_augmentations(image)
+                augmented_image = apply_augmentations_monai(image, transform)
 
-            # Step 3 - Save augmented images back to file
-            save_augmented_image(paths[i], augmented_image, save_dir)
-
+                # Step 3 - Save augmented images back to file
+                save_augmented_image(str(count) + paths[i], augmented_image, save_dir)
 
 
 if __name__ == "__main__":
-    delete_augmented_images("../data")
+    delete_augmented_images(SSLTrainingConfig.data_dir)
     main()
 
 

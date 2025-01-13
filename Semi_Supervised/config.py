@@ -9,8 +9,8 @@ import torch
 class SSLTrainingConfig:
     """Configuration for training pipeline."""
     # Data parameters
-    data_dir: Path = Path("../data")
-    output_dir: Path = Path("output")
+    data_dir: Path = Path(__file__).parent / "../data"
+    output_dir: Path = Path(__file__).parent / "output"
     target_size: Tuple[int, int, int] = (160, 160, 32)
     n_classes: int = 9
 

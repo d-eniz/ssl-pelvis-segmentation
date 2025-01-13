@@ -1,0 +1,20 @@
+MPHY0041 Medical Imaging Coursework 2 - Instructions
+
+
+REQUIRED MODULES:
+- monai (https://pypi.org/project/monai/)
+
+Installed by
+```shell
+pip install monai[all]
+
+```
+
+Expects data in folder `cw2/data`
+
+TO RUN ALL CODE:
+In cw2 directory:
+```shell
+python main.py
+```
+
