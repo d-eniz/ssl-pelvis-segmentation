@@ -5,11 +5,15 @@ Might not be as flexible as you want, but just an example script to show you how
 
 **Note** paths to imported files will need to change if put in a different directory!!
 """
+import sys
+import os
+
+# Add the project root to the system path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from Semi_Supervised.SemiSupervisedLearning import SimpleSSL, load_swin_unetr, CombinedLoss
 from Semi_Supervised.config import SSLTrainingConfig
 from Semi_Supervised.data_loaders import create_dataloaders
-
 import torch
 
 # Define the config to use for the script
