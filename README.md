@@ -1,36 +1,88 @@
 # mphy0041-pelvis-segmentation
 
-**NOTE**: An example for using the SSL stuff for supervised learning without having to do anything new is given in [SupervisedLearningExample.py](Semi_Supervised%2FSupervisedLearningExample.py).
-You may want more flexibility than what this currently offers, but is a starting point on doing things easily.
 
-## Example `main` script to run everything:
+MPHY0041 Medical Imaging Coursework 2 - Instructions
 
-```python
-# Supervised Learning
+Uses PyTorch conda environment.
 
-from SupervisedLearning import SupervisedTrainer
-from Supervised_learning.config import SLTrainingConfig
+#### REQUIRED MODULES:
+- monai (https://pypi.org/project/monai/)
+- requests
 
-SL_config = SLTrainingConfig()
-
-SL_trainer = SupervisedTrainer(SL_config)
-SL_trainer.train()
-
-# Semi Supervised Learning
-
-from Semi_Supervised import SemiSupervisedLearning
-
-SemiSupervisedLearning.train()  # Outputs steps to console
-
-SemiSupervisedLearning.test()  # (Yet to be implemented)
+#### Installed by
+```shell
+pip install monai[einops,skimage,matplotlib]
+pip install requests
 ```
 
-## Output Examples
+#### Expects data in folder `cw2/data`
 
-Supervised Learning:
+### TO RUN ALL CODE:
+(Both supervised learning and semi supervised learning)
 
-![gif1](https://github.com/d-eniz/mphy0041-pelvis-segmentation/blob/main/Supervised_learning/output/examples/sample_13_batch_0_mode_2.gif?raw=true)
+1. create conda environment and activate
+2. install required modules
+3. cd to directory containing the code (cw2) and make sure it also has the data in (cw2/data)
+4. run: `python main.py`
 
-![gif2](https://github.com/d-eniz/mphy0041-pelvis-segmentation/blob/main/Supervised_learning/output/examples/sample_16_batch_2_mode_2.gif?raw=true)
 
-![gif3](https://github.com/d-eniz/mphy0041-pelvis-segmentation/blob/main/Supervised_learning/output/examples/sample_1_batch_1_mode_2.gif?raw=true)
+
+
+---
+#### Full Run shell:
+```shell
+conda create -n mphy0041-cw2-pt -c conda-forge pytorch=2.4 torchvision=0.14 nibabel=5.3
+conda activate mphy0041-cw2-pt
+
+pip install monai[einops, skimage, matplotlib]
+pip install requests
+
+
+cd path/to/this_group/cw2  # CHANGE THIS TO ACTUAL PATH CONTAINING THIS cw2 and cw2/data
+
+python main.py
+```
+
+---
+
+The actual sbatch command used to run the full script for reference:
+
+*Run on UCL DIAS HPC cluster*
+
+ML_RUN_CPU.sh:
+
+```shell
+#!/bin/bash -l
+#SBATCH --partition COMPUTE
+#SBATCH --nodes 1
+#SBATCH -n12
+#SBATCH --mem-per-cpu 40G
+#SBATCH --time 24:00:00
+#SBATCH --job-name ML_RUN_CPU
+#SBATCH --output ML_RUN_CPU.log
+
+XDG_RUNTIME_DIR=""
+export port=$(shuf -i8000-9999 -n1)
+export node=$(hostname -s)
+export user=$(whoami)
+export cluster=$(hostname -f | awk -F"." '{print $2}')
+
+# Load Conda and activate environment
+eval "$(/share/apps/anaconda/3-2022.05/bin/conda shell.bash hook)"
+conda create -n mphy0041-cw2-pt -c conda-forge pytorch=2.4 torchvision=0.14 nibabel=5.3
+conda activate mphy0041-cw2-pt
+
+pip install monai[einops,skimage,matplotlib]
+pip install requests
+
+cd /home/xzcapbel/MedicalPhysics/cw2
+
+python main.py
+```
+
+
+
+Ran via:
+```
+sbatch ML_RUN_CPU.sh
+```

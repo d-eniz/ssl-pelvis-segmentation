@@ -25,7 +25,9 @@ class ModelEvaluator:
         self.criterion = nn.CrossEntropyLoss()
 
     def test(self):
+        """
         Evaluate the model on the test dataset.
+        """
         test_loss = 0
         dice_scores = []
         iou_scores = []

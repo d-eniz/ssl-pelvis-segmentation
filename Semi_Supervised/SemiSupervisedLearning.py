@@ -168,7 +168,9 @@ def load_pretrained_weights(model: torch.nn.Module, modelStateDictPath: Path, co
         dice_score = data["dice_score"]
         all_dice_scores = data["all_dice_scores"]
     except KeyError:
-        print("Model not loaded from pretrained as data not saved properly!")
+        print("Not all data saved, trying to just load model!")
+        model.load_state_dict(data)
+
 
     # Set up preloaded optimizer
     optimizer = config.optimizer(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)

@@ -1,6 +1,7 @@
 """
 A script to carry out testing on the models
 """
+import os.path
 from pathlib import Path
 
 # from config import SSLTrainingConfig
@@ -333,7 +334,7 @@ def display_model_comparisons(data_outline, model_names, save_path=""):
                 new_ax.set_title("Predicted", pad=5, fontsize=10)
 
         # Add a single title for this row
-        fig.text(0.5, 0.965 - (i / num_models), f"{model_name}",
+        fig.text(0.5, 0.955 - (i / num_models + 1), f"{model_name}",  # CHANGE NUMBRE HERE TO CHANGE PLOT
                  ha='center', va='bottom', fontsize=12, fontweight='bold')
 
     # Final layout adjustments
@@ -353,21 +354,46 @@ def test_SSL(save_path="outputImage"):
     """
     global metrics
 
+    def get_unet3D():
+        from monai.networks.nets import UNet
+        from monai.networks.layers import Norm
+
+        model = UNet(
+            spatial_dims=3,  # Use 3D convolutions
+            in_channels=1,  # Number of input channels
+            out_channels=9,  # Number of output classes
+            channels=(32, 64, 128, 256),  # Feature map channels per layer
+            strides=(2, 2, 2),  # Down-sampling strides
+            num_res_units=2,  # Residual units per layer
+            norm=Norm.BATCH  # Batch Normalization
+        )
+        return model
+
     # Load whichever pretrained models you want
     models = []
     config = SSLTrainingConfig()
     _, _, val_loader, test_loader = create_dataloaders(config)
 
     og_path = config.output_dir
+    config_sl = config
 
-    # GET UNET3D
-    config.output_dir = config.output_dir / "UNet3D"
+    # GET SL UNET3D
+    model = get_unet3D()
+    model_UNET_SL, optimizer, scheduler, epoch, best_dice, all_dice = load_pretrained_weights(model,
+                                                                                           modelStateDictPath= Path(os.path.join(__file__, "../../Supervised_learning/output/unet_supervised.pth")),
+                                                                                           config=config)
+
+    models.append(model_UNET_SL)
+
+    # SSL GET UNET3D
+    config.output_dir = og_path / "UNet3D"
     model = get_unet3D()
     model_UNET, optimizer, scheduler, epoch, best_dice, all_dice = load_pretrained_weights(model,
                                                                                            modelStateDictPath=Path(
                                                                                                f"{config.output_dir}/best_model.pth"),
                                                                                            config=config)
 
+    models.append(model_UNET)
     models.append(model_UNET)
 
     # GET SWIN UNETR
@@ -384,7 +410,7 @@ def test_SSL(save_path="outputImage"):
     get_predictions(models, test_loader, config)
 
     # Format and show results
-    model_names = ["UNet Model SSL", "Swin UNETR Model SSL", "Ensemble Predictor"]
+    model_names = ["UNet Model SL", "UNet Model SSL", "Swin UNETR Model SSL", "Ensemble Predictor"]
 
     display_model_comparisons(metrics, model_names, save_path)
 

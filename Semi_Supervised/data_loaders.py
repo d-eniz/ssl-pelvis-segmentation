@@ -41,7 +41,7 @@ class PelvicMRDataset(Dataset):
         """
         Loads the dataset images from
         """
-        print(f"Scanning directory: {self.data_dir}")  # Debugging
+        print(f"Scanning directory: {self.data_dir} for .nii images")  # Debugging
 
         image_files = sorted(list(self.data_dir.glob("*_img.nii")))
         label_files = {f.stem.replace("_mask", "") for f in self.data_dir.glob("*_mask.nii")}
