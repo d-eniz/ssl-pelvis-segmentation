@@ -126,3 +126,14 @@ The model is evaluated using standard segmentation metrics, including:
 ## Usage Notice
 
 This project is a coursework submission and is for display purposes only. It is not intended for commercial or production use. For research or development purposes, please refer to the official dataset page for proper usage and licensing.
+
+## Project Contributors
+
+This project was developed by:
+
+- [Ben Elliott](https://github.com/Ben-elliot27)
+- [Deniz Terzioglu](https://github.com/d-eniz)
+- [George Doumenis Ramos](https://github.com/georgedoumenisramos)
+- [Kajan Subakannan](https://github.com/KajanGH)
+- [Pego Letebe](https://github.com/PgStar1)
+- [Peniel Chew](https://github.com/penielc173)
