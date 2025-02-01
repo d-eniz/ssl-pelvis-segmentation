@@ -4,6 +4,8 @@ This repository contains code for pelvis segmentation using supervised and semi-
 
 This project was developed as coursework for UCL's [Machine Learning for Medical Imaging](https://github.com/YipengHu/MPHY0041) module.
 
+![gif3](https://github.com/d-eniz/mphy0041-pelvis-segmentation/blob/main/Supervised_learning/output/examples/sample_1_batch_1_mode_2.gif?raw=true)
+
 ## 📌 Features
 
 ✅ **Supervised & Semi-Supervised Learning** – Implements both training paradigms for segmentation tasks
