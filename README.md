@@ -20,7 +20,7 @@ This project uses the **Cross-institution Male Pelvic Structures dataset**, whic
 You can download the dataset here:
 - [Cross-institution Male Pelvic Structures Dataset](https://zenodo.org/records/7013610)
 
-## ⚙Setup & Dependencies
+## Setup & Dependencies
 
 ### Required Modules
 
@@ -59,7 +59,7 @@ cd path/to/cw2  # Replace with actual path
 python main.py
 ```
 
-### 🖥On UCL DIAS HPC Cluster
+### On UCL DIAS HPC Cluster
 
 Use the provided SLURM batch script:
 
